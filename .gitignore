@@ -28,3 +28,10 @@ coverage/
 # Temporary files
 *.tmp
 *~
+
+# npm pack output
+*.tgz
+
+# build / validation artefacts
+docker-report.txt
+validation-results.txt
