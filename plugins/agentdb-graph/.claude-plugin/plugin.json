@@ -7,11 +7,13 @@
     "url": "https://github.com/ruvnet"
   },
   "homepage": "https://github.com/ruvnet/agentdb/tree/main/plugins/agentdb-graph",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ruvnet/agentdb.git",
-    "directory": "plugins/agentdb-graph"
-  },
+  "repository": "https://github.com/ruvnet/agentdb.git",
   "license": "MIT OR Apache-2.0",
-  "keywords": ["agentdb", "graph", "cypher", "hyperedge", "claude-code"]
+  "keywords": [
+    "agentdb",
+    "graph",
+    "cypher",
+    "hyperedge",
+    "claude-code"
+  ]
 }

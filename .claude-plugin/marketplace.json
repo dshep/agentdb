@@ -1,66 +1,40 @@
 {
-  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/marketplace.json",
   "name": "agentdb",
-  "version": "0.1.0",
-  "description": "AgentDB plugins for Claude Code — vector memory, episodic recall, causal graph, RL routing, all backed by the agentdb npm package",
+  "description": "AgentDB Marketplace: vector memory, episodic recall, causal graph, RL routing, and advanced retrieval — all backed by the agentdb npm package",
   "owner": {
     "name": "ruvnet",
-    "url": "https://github.com/ruvnet",
-    "email": "ruv@ruv.net"
-  },
-  "metadata": {
-    "homepage": "https://github.com/ruvnet/agentdb",
-    "repository": "https://github.com/ruvnet/agentdb",
-    "license": "MIT OR Apache-2.0"
+    "url": "https://github.com/ruvnet"
   },
   "plugins": [
     {
       "name": "agentdb-core",
       "source": "./plugins/agentdb-core",
-      "description": "Foundation plugin — pattern store, search, stats. Surfaces agentdb_pattern_store, agentdb_pattern_search, agentdb_pattern_stats.",
-      "version": "0.1.0",
-      "category": "memory",
-      "tags": ["agentdb", "memory", "vectors", "foundation"]
+      "description": "Foundation plugin — pattern store, search, stats. Surfaces agentdb_pattern_store, agentdb_pattern_search, agentdb_pattern_stats."
     },
     {
       "name": "agentdb-memory",
       "source": "./plugins/agentdb-memory",
-      "description": "Episodic replay (Reflexion) + skill library. /remember and /recall slash commands; agentdb-curator agent for nightly consolidation.",
-      "version": "0.1.0",
-      "category": "memory",
-      "tags": ["agentdb", "reflexion", "skills", "episodic"]
+      "description": "Episodic replay (Reflexion) + skill library. /remember and /recall slash commands; agentdb-curator agent for nightly consolidation."
     },
     {
       "name": "agentdb-causal",
       "source": "./plugins/agentdb-causal",
-      "description": "Causal graph + hierarchical memory. /link and /explain-link slash commands; agentdb-investigator agent for root-cause traversal.",
-      "version": "0.1.0",
-      "category": "memory",
-      "tags": ["agentdb", "causal", "graph", "hierarchical"]
+      "description": "Causal graph + hierarchical memory. /link and /explain-link slash commands; agentdb-investigator agent for root-cause traversal."
     },
     {
       "name": "agentdb-learning",
       "source": "./plugins/agentdb-learning",
-      "description": "RL + Thompson Sampling bandit. 9 algorithms (Q-Learning, PPO, MCTS, etc.); /learn-task and /route-task slash commands.",
-      "version": "0.1.0",
-      "category": "intelligence",
-      "tags": ["agentdb", "reinforcement-learning", "bandit", "routing"]
+      "description": "RL + Thompson Sampling bandit. 9 algorithms (Q-Learning, PPO, MCTS, etc.); /learn-task and /route-task slash commands."
     },
     {
       "name": "agentdb-graph",
       "source": "./plugins/agentdb-graph",
-      "description": "Graph queries — Cypher execution, k-hop traversal, hyperedge search.",
-      "version": "0.1.0",
-      "category": "memory",
-      "tags": ["agentdb", "graph", "cypher", "traversal"]
+      "description": "Graph queries — Cypher execution, k-hop traversal, hyperedge search."
     },
     {
       "name": "agentdb-search",
       "source": "./plugins/agentdb-search",
-      "description": "Advanced retrieval — MMR diversity rerank, explainable recall, metadata filters, hybrid search.",
-      "version": "0.1.0",
-      "category": "memory",
-      "tags": ["agentdb", "search", "rerank", "hybrid"]
+      "description": "Advanced retrieval — MMR diversity rerank, explainable recall, metadata filters, hybrid (BM25 + dense) search."
     }
   ]
 }

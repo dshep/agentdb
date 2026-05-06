@@ -7,11 +7,13 @@
     "url": "https://github.com/ruvnet"
   },
   "homepage": "https://github.com/ruvnet/agentdb/tree/main/plugins/agentdb-learning",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ruvnet/agentdb.git",
-    "directory": "plugins/agentdb-learning"
-  },
+  "repository": "https://github.com/ruvnet/agentdb.git",
   "license": "MIT OR Apache-2.0",
-  "keywords": ["agentdb", "reinforcement-learning", "bandit", "routing", "claude-code"]
+  "keywords": [
+    "agentdb",
+    "reinforcement-learning",
+    "bandit",
+    "routing",
+    "claude-code"
+  ]
 }
