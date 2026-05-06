@@ -2937,7 +2937,7 @@ MIT OR Apache-2.0 — See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENS
 npm install agentdb
 ```
 
-[Quick Start](#quick-start) | [Tutorials](#tutorials) | [MCP Integration](#mcp-integration) | [GitHub](https://github.com/ruvnet/agentic-flow/tree/main/packages/agentdb) | [npm](https://www.npmjs.com/package/agentdb)
+[Quick Start](#quick-start) | [Tutorials](#tutorials) | [MCP Integration](#mcp-integration) | [GitHub](https://github.com/ruvnet/agentdb) | [npm](https://www.npmjs.com/package/agentdb)
 
 
 ---
