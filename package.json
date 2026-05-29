@@ -65,7 +65,7 @@
     "test": "vitest",
     "test:unit": "vitest --run",
     "test:browser": "vitest browser-bundle-unit.test.js --run",
-    "test:ci": "npm run test:browser && npm run build && npm run verify:bundle",
+    "test:ci": "npm run test:unit && npm run test:browser && npm run build && npm run verify:bundle",
     "verify:bundle": "node scripts/verify-bundle.js",
     "cli": "node dist/src/cli/agentdb-cli.js",
     "docker:test": "docker build -f docs/SQLITE-FIX-DOCKER-TEST.Dockerfile -t agentdb-test . && docker run --rm agentdb-test",
@@ -79,7 +79,8 @@
     "benchmark:adr072": "vitest run tests/benchmarks/adr-072-phase1-benchmark.test.ts --reporter=verbose",
     "benchmark:adr072:fast": "vitest run tests/benchmarks/validate-adr072.test.ts",
     "benchmark:all": "npm run benchmark:attention && npm run benchmark:backends && npm run benchmark:profile && npm run benchmark:ruvector",
-    "build:model": "node scripts/build-model-rvf.mjs"
+    "build:model": "node scripts/build-model-rvf.mjs",
+    "prebuild": "node scripts/inline-schemas.mjs"
   },
   "keywords": [
     "agentdb",

@@ -151,46 +151,12 @@ class AgentDBCLI {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = -64000');
 
-    // Load both schemas: main schema (episodes, skills) + frontier schema (causal)
-    const schemaFiles = ['schema.sql', 'frontier-schema.sql'];
-    const basePaths = [
-      path.join(__dirname, '../schemas'),  // dist/cli/../schemas (local dev)
-      path.join(__dirname, '../../schemas'),  // dist/schemas (published package)
-      path.join(__dirname, '../../src/schemas'),  // dist/cli/../../src/schemas
-      path.join(process.cwd(), 'dist/schemas'),  // current/dist/schemas
-      path.join(process.cwd(), 'src/schemas'),  // current/src/schemas
-      path.join(process.cwd(), 'node_modules/agentdb/dist/schemas')  // installed package
-    ];
-
-    let schemasLoaded = 0;
-    for (const basePath of basePaths) {
-      if (fs.existsSync(basePath)) {
-        for (const schemaFile of schemaFiles) {
-          const schemaPath = path.join(basePath, schemaFile);
-          if (fs.existsSync(schemaPath)) {
-            try {
-              const schema = fs.readFileSync(schemaPath, 'utf-8');
-              this.db.exec(schema);
-              schemasLoaded++;
-            } catch (error) {
-              log.error(`Failed to load schema from ${schemaPath}: ${(error as Error).message}`);
-            }
-          }
-        }
-        // If we found at least one schema in this path, we're done
-        if (schemasLoaded > 0) break;
-      }
-    }
-
-    if (schemasLoaded === 0) {
-      log.warning('Schema files not found, database may not be initialized properly');
-      log.info('__dirname: ' + __dirname);
-      log.info('process.cwd(): ' + process.cwd());
-      log.info('Tried base paths:');
-      basePaths.forEach(p => {
-        log.info(`  - ${p} (exists: ${fs.existsSync(p)})`);
-      });
-    }
+    // Load both schemas from the inlined constants — bundled into the package,
+    // so globally-installed CLIs and weird __dirname resolutions just work.
+    // (Was a long __dirname/cwd dance that failed for `npm install -g`. #1)
+    const { SCHEMA_SQL, FRONTIER_SCHEMA_SQL } = await import('../schemas/inline.js');
+    if (SCHEMA_SQL) this.db.exec(SCHEMA_SQL);
+    if (FRONTIER_SCHEMA_SQL) this.db.exec(FRONTIER_SCHEMA_SQL);
 
     // Initialize embedding service
     this.embedder = new EmbeddingService({

@@ -1,6 +1,14 @@
 /**
- * Database System using sql.js (WASM SQLite)
- * Pure JavaScript implementation with NO build dependencies
+ * Database System backed by SQLite.
+ *
+ * Resolution order (ruflo #2235 A):
+ *   1. **better-sqlite3** if the optional peer is loadable — native, faster,
+ *      what most callers actually want when they install the native module.
+ *   2. **sql.js** (WASM) — pure-JS fallback, requires no build tools.
+ *
+ * Both implementations expose the same `db.prepare(sql).run/get/all(...)`
+ * interface (the sql.js wrapper below was designed to mimic better-sqlite3),
+ * so callers don't care which one served them.
  *
  * SECURITY: Fixed SQL injection vulnerabilities:
  * - PRAGMA commands validated against whitelist
@@ -14,19 +22,36 @@ import * as path from 'path';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars -- sql.js Database has no shared TS type with better-sqlite3; kept for documentation
 type Database = any;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- cached wrapper class
-let sqlJsWrapper: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- cached impl (better-sqlite3 class or sql.js wrapper class)
+let cachedImpl: any = null;
+let cachedImplKind: 'better-sqlite3' | 'sql.js' | null = null;
 
 /**
- * Get sql.js database implementation (ONLY sql.js, no better-sqlite3)
+ * Get the SQLite database implementation. Prefers native `better-sqlite3`
+ * when loadable; falls back to WASM `sql.js` (no build tools required).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- returns dynamically constructed class
 export async function getDatabaseImplementation(): Promise<any> {
-  // Return cached wrapper
-  if (sqlJsWrapper) {
-    return sqlJsWrapper;
+  if (cachedImpl) return cachedImpl;
+
+  // 1. Try native better-sqlite3 (optional peer; same prepare/run API).
+  if (!process.env.AGENTDB_FORCE_SQLJS) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic optional import
+      const mod: any = await import('better-sqlite3');
+      const BetterSqlite3 = mod.default ?? mod;
+      if (typeof BetterSqlite3 === 'function') {
+        cachedImpl = BetterSqlite3;
+        cachedImplKind = 'better-sqlite3';
+        console.log('✅ Using native better-sqlite3');
+        return cachedImpl;
+      }
+    } catch {
+      // Not installed or failed to load → fall through to sql.js.
+    }
   }
 
+  // 2. Fall back to sql.js (WASM, no build tools).
   try {
     console.log('✅ Using sql.js (WASM SQLite, no build tools required)');
 
@@ -34,17 +59,23 @@ export async function getDatabaseImplementation(): Promise<any> {
     const mod = await import('sql.js');
     const SQL = await mod.default();
 
-    // Create database wrapper
-    sqlJsWrapper = createSqlJsWrapper(SQL);
-
-    return sqlJsWrapper;
+    cachedImpl = createSqlJsWrapper(SQL);
+    cachedImplKind = 'sql.js';
+    return cachedImpl;
   } catch (error) {
     console.error('❌ Failed to initialize sql.js:', (error as Error).message);
     throw new Error(
-      'Failed to initialize SQLite. Please ensure sql.js is installed:\n' +
-      'npm install sql.js'
+      'Failed to initialize SQLite. Install one of:\n' +
+      '  npm install better-sqlite3  # native, faster (recommended)\n' +
+      '  npm install sql.js          # pure-JS fallback, no build tools'
     );
   }
+}
+
+/** Reset the cached implementation (intended for tests). */
+export function _resetDatabaseImplementationForTests(): void {
+  cachedImpl = null;
+  cachedImplKind = null;
 }
 
 /**
@@ -460,10 +491,20 @@ export function getDatabaseInfo(): {
   performance: 'high' | 'medium' | 'low';
   requiresBuildTools: boolean;
 } {
+  // Reports the currently-loaded backend; falls back to the sql.js description
+  // before getDatabaseImplementation() has run.
+  if (cachedImplKind === 'better-sqlite3') {
+    return {
+      implementation: 'better-sqlite3 (native)',
+      isNative: true,
+      performance: 'high',
+      requiresBuildTools: true,
+    };
+  }
   return {
     implementation: 'sql.js (WASM)',
     isNative: false,
     performance: 'medium',
-    requiresBuildTools: false
+    requiresBuildTools: false,
   };
 }

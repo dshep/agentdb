@@ -129,11 +129,13 @@ export class UnifiedDatabase {
       console.log('   - ACID transactions available');
       console.log('   - 131K+ ops/sec batch inserts');
     } else {
-      // Use legacy SQLite
-      const { createDatabase } = await import('./db-fallback.js');
+      // Use legacy SQLite — db-fallback prefers native better-sqlite3 when
+      // loadable and falls back to sql.js (WASM) otherwise (ruflo #2235 A).
+      const { createDatabase, getDatabaseInfo } = await import('./db-fallback.js');
       this.sqliteDb = await createDatabase(this.config.path);
+      const info = getDatabaseInfo();
 
-      console.log('⚠️  Using legacy SQLite mode');
+      console.log(`⚠️  Using legacy SQLite mode (${info.implementation})`);
       console.log('   - Limited to SQL queries');
       console.log('   - No hypergraph support');
       console.log('   - Consider migration to GraphDatabase');

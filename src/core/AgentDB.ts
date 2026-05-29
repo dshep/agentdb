@@ -126,20 +126,18 @@ export class AgentDB {
   }
 
   /**
-   * Load database schemas
+   * Load database schemas.
+   *
+   * Uses inlined SQL constants (src/schemas/inline.ts, generated from the .sql
+   * files at build time) so this works in:
+   *   - the browser (no `fs` available) — fixes #2
+   *   - globally-installed CLIs where __dirname resolution misses dist/schemas
+   *     (the "Schema file not found" warning at install time) — fixes #1
    */
   private async loadSchemas(): Promise<void> {
-    const schemaPath = path.join(__dirname, '../../schemas/schema.sql');
-    if (fs.existsSync(schemaPath)) {
-      const schema = fs.readFileSync(schemaPath, 'utf-8');
-      this.db.exec(schema);
-    }
-
-    const frontierSchemaPath = path.join(__dirname, '../../schemas/frontier-schema.sql');
-    if (fs.existsSync(frontierSchemaPath)) {
-      const frontierSchema = fs.readFileSync(frontierSchemaPath, 'utf-8');
-      this.db.exec(frontierSchema);
-    }
+    const { SCHEMA_SQL, FRONTIER_SCHEMA_SQL } = await import('../schemas/inline.js');
+    if (SCHEMA_SQL) this.db.exec(SCHEMA_SQL);
+    if (FRONTIER_SCHEMA_SQL) this.db.exec(FRONTIER_SCHEMA_SQL);
   }
 
   getController(name: string): any {
