@@ -7,6 +7,7 @@
 
 import { AgentDB } from '../core/AgentDB.js';
 import { EventEmitter } from 'events';
+import { randomBytes } from 'node:crypto';
 
 export interface Episode {
   id?: string;
@@ -377,10 +378,11 @@ export class AgentDBFast extends EventEmitter {
   }
 
   /**
-   * Generate unique ID
+   * Generate a unique ID using a CSPRNG so IDs are unpredictable and
+   * collision-resistant (CWE-338). ADR-073 §C.3.
    */
   private generateId(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return `${prefix}_${Date.now()}_${randomBytes(8).toString('hex')}`;
   }
 }
 

@@ -10,6 +10,7 @@
  */
 
 import { createDatabase } from '../db-fallback.js';
+import { parseJsonStrict } from '../security/input-validation.js';
 import { CausalMemoryGraph } from '../controllers/CausalMemoryGraph.js';
 import { CausalRecall } from '../controllers/CausalRecall.js';
 import { ExplainableRecall } from '../controllers/ExplainableRecall.js';
@@ -282,7 +283,12 @@ class AgentDBCLI {
       isTreatment: params.isTreatment,
       outcomeValue: params.outcome,
       outcomeType: 'reward',
-      context: params.context && params.context.trim() ? JSON.parse(params.context) : undefined
+      // #6 §C.1 — strict parse so a crafted/malformed `--context` JSON
+      // surfaces as a ValidationError, not an unhandled SyntaxError leaking
+      // a stack trace.
+      context: params.context && params.context.trim()
+        ? parseJsonStrict<Record<string, unknown>>(params.context, 'context')
+        : undefined
     });
 
     // Save database to persist changes

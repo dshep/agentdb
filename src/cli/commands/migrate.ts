@@ -5,6 +5,7 @@
  */
 
 import { createDatabase } from '../../db-fallback.js';
+import { validateSqlIdentifier, ValidationError } from '../../security/input-validation.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -495,11 +496,21 @@ function analyzeMigration(
     records: {}
   };
 
-  // Count records in each table
+  // Count records in each table. Even though `table` comes from
+  // sqlite_master (internal schema), a malicious .db file could craft a
+  // table name that escapes the query (CWE-89). Whitelist via
+  // validateSqlIdentifier — ADR-073 §C.2.
   for (const table of tables) {
     if (table === 'sqlite_sequence') continue;
+    let safeTable: string;
     try {
-      const result = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number } | undefined;
+      safeTable = validateSqlIdentifier(table);
+    } catch (err) {
+      analysis.records[table] = `Skipped: invalid identifier (${err instanceof ValidationError ? err.code : 'unknown'})`;
+      continue;
+    }
+    try {
+      const result = db.prepare(`SELECT COUNT(*) as count FROM ${safeTable}`).get() as { count: number } | undefined;
       analysis.records[table] = result?.count ?? 0;
     } catch (e) {
       analysis.records[table] = 'Error counting';

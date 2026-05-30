@@ -880,6 +880,45 @@ const tools = [
       required: ['patterns'],
     },
   },
+
+  // ==========================================================================
+  // ADR-073 — SOTA roadmap additions (causal traversal · batch delete · on-demand consolidation)
+  // ==========================================================================
+  {
+    name: 'causal_traverse',
+    description: 'Walk the causal graph between two memories. Returns the chain of causal links (with confidence and uplift) up to max_depth hops. Use this to answer "WHY does this memory matter?" / "what chain of causes led here?" — the primary explainability surface beyond a single recall. Wraps CausalMemoryGraph.getCausalChain().',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_memory_id: { type: 'number', description: 'Starting memory id (the cause / earlier node)' },
+        to_memory_id: { type: 'number', description: 'Ending memory id (the effect / target node)' },
+        max_depth: { type: 'number', description: 'Maximum hops along the causal chain', default: 5, minimum: 1, maximum: 20 },
+      },
+      required: ['from_memory_id', 'to_memory_id'],
+    },
+  },
+  {
+    name: 'agentdb_delete_batch',
+    description: 'Delete many episode/pattern rows by ID list in a single transaction. Faster and safer than looping `agentdb_delete` (one transaction, validated IDs, atomic). Use for bulk cleanup of old sessions / failed experiments.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'number' }, description: 'Episode IDs to delete (1–1000 per call)', minItems: 1, maxItems: 1000 },
+        table: { type: 'string', enum: ['episodes', 'reasoning_patterns'], default: 'episodes', description: 'Target table (whitelist-validated)' },
+      },
+      required: ['ids'],
+    },
+  },
+  {
+    name: 'consolidate_now',
+    description: 'Run the NightlyLearner consolidation pass on demand — discovers new causal edges, prunes low-confidence edges, and promotes high-reward episodes into skills. Use after a batch of new episodes or when you want consolidated memories available immediately (instead of waiting for a scheduled run). Returns a summary report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Optional: limit consolidation to this session' },
+      },
+    },
+  },
 ];
 
 // ============================================================================
@@ -2257,6 +2296,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 `\n💡 Use this reward signal for learning feedback`,
             },
           ],
+        };
+      }
+
+      // ======================================================================
+      // ADR-073 — SOTA roadmap handlers
+      // ======================================================================
+      case 'causal_traverse': {
+        const fromId = args?.from_memory_id as number;
+        const toId = args?.to_memory_id as number;
+        const maxDepth = (args?.max_depth as number) || 5;
+        const chain = await causalGraph.getCausalChain(fromId, toId, maxDepth);
+        const found = chain && Array.isArray((chain as any).edges) ? (chain as any).edges.length > 0 : false;
+        return {
+          content: [{
+            type: 'text',
+            text: found
+              ? `🔗 Causal chain ${fromId} → ${toId} (max ${maxDepth} hops):\n${JSON.stringify(chain, null, 2)}`
+              : `❌ No causal chain found between memory #${fromId} and #${toId} within ${maxDepth} hops.`,
+          }],
+        };
+      }
+
+      case 'agentdb_delete_batch': {
+        const ids = (args?.ids as number[]) || [];
+        const requestedTable = (args?.table as string) || 'episodes';
+        const allowedTables = new Set(['episodes', 'reasoning_patterns']);
+        if (!allowedTables.has(requestedTable)) {
+          throw new Error(`Invalid table: ${requestedTable}`);
+        }
+        if (ids.length === 0) {
+          return { content: [{ type: 'text', text: '⚠️  No IDs supplied — nothing to delete.' }] };
+        }
+        // Validate each id is a positive integer (defense in depth)
+        const safeIds = ids.map((raw) => {
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n <= 0) throw new Error(`Invalid id: ${raw}`);
+          return n;
+        });
+        const placeholders = safeIds.map(() => '?').join(',');
+        // requestedTable is whitelist-checked above; parameterising values via ?.
+        const stmt = db.prepare(`DELETE FROM ${requestedTable} WHERE id IN (${placeholders})`);
+        const result = stmt.run(...safeIds);
+        return {
+          content: [{
+            type: 'text',
+            text: `🗑️  Batch delete from \`${requestedTable}\`: ${result.changes}/${safeIds.length} rows removed (atomic).`,
+          }],
+        };
+      }
+
+      case 'consolidate_now': {
+        const sessionId = args?.session_id as string | undefined;
+        const t0 = Date.now();
+        // Prefer the session-scoped path when sessionId is given.
+        const report = sessionId
+          ? await learner.consolidateEpisodes(sessionId)
+          : await learner.run();
+        const ms = Date.now() - t0;
+        return {
+          content: [{
+            type: 'text',
+            text: `🌙 Consolidation complete${sessionId ? ` (session=${sessionId})` : ''} in ${ms}ms\n` +
+              JSON.stringify(report, null, 2),
+          }],
         };
       }
 

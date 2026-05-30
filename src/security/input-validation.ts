@@ -86,6 +86,29 @@ export class ValidationError extends Error {
 }
 
 /**
+ * Strictly parse JSON user input. Wraps `JSON.parse` so a crafted / malformed
+ * input becomes a `ValidationError` with a safe message instead of an
+ * unhandled `SyntaxError` (which would leak a stack trace and DoS the caller).
+ *
+ * Use this at every CLI/MCP boundary where the input is a user-supplied JSON
+ * string. The pre-existing `safeJsonParse` helper in ReasoningBank.ts
+ * silently falls back on bad input — appropriate for parsing rows we wrote
+ * ourselves, but NOT for user input where we want to reject loudly.
+ *
+ * See ADR-073 §C.1.
+ */
+export function parseJsonStrict<T = unknown>(json: string, fieldName: string): T {
+  if (typeof json !== 'string') {
+    throw new ValidationError(`${fieldName} must be a JSON string`, 'INVALID_TYPE', fieldName);
+  }
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    throw new ValidationError(`${fieldName} is not valid JSON`, 'INVALID_JSON', fieldName);
+  }
+}
+
+/**
  * Validate task string (NEW - for MCP tool optimization)
  */
 export function validateTaskString(task: unknown, fieldName: string = 'task'): string {

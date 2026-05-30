@@ -18,6 +18,8 @@
 // Types are defined inline since @ruvector/graph-node doesn't export interfaces properly
 // See node_modules/@ruvector/graph-node/index.d.ts for reference
 
+import { randomBytes } from 'node:crypto';
+
 type GraphDatabase = any; // Will use dynamic import
 type JsNode = {
   id: string;
@@ -159,7 +161,8 @@ export class GraphDatabaseAdapter {
    */
   async storeEpisode(episode: EpisodeNode, embedding: Float32Array): Promise<string> {
     const node: JsNode = {
-      id: episode.id || `episode-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      // CSPRNG-backed ID (CWE-338) — ADR-073 §C.3
+      id: episode.id || `episode-${Date.now()}-${randomBytes(8).toString('hex')}`,
       embedding: embedding,
       labels: ['Episode'],
       properties: {
@@ -184,7 +187,8 @@ export class GraphDatabaseAdapter {
    */
   async storeSkill(skill: SkillNode, embedding: Float32Array): Promise<string> {
     const node: JsNode = {
-      id: skill.id || `skill-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      // CSPRNG-backed ID (CWE-338) — ADR-073 §C.3
+      id: skill.id || `skill-${Date.now()}-${randomBytes(8).toString('hex')}`,
       embedding: embedding,
       labels: ['Skill'],
       properties: {
