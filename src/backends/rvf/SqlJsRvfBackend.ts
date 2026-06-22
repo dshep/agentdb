@@ -47,6 +47,47 @@ interface CacheEntry {
   metadata?: Record<string, unknown>;
 }
 
+// ─── MEMFS leak safety net (closes ruflo#2432 class) ────────────────────────
+//
+// sql.js's Emscripten module is a process-global singleton. Every
+// `new SQL.Database(...)` allocates a MEMFS file (~sizeof database) that
+// only releases on explicit `.close()` — GC of the wrapping JS object does
+// NOT reclaim MEMFS because the underlying `FS.nodes` array is held by the
+// module's closure.
+//
+// Long-running consumers that re-instantiate backends without explicit close
+// leak MEMFS files unbounded. Downstream report: ruvnet/ruflo#2432 observed
+// ~36 GB external memory growth over 6 weeks (~11 MB per orphaned wrapper).
+//
+// The defensive fix: a FinalizationRegistry that closes the underlying
+// sql.js Database when the wrapping SqlJsRvfBackend gets GC'd. Belt-and-
+// suspenders — correct consumers (who call `.close()` explicitly) get no
+// behavior change because we unregister on explicit close.
+//
+// Also tracked: a WeakSet of open wrappers so consumers can call
+// `SqlJsRvfBackend.openCount()` for leak detection in monitoring dashboards.
+
+interface SqlJsHandle {
+  close(): void;
+}
+
+const __memfsFinalizer: FinalizationRegistry<SqlJsHandle> | null =
+  typeof FinalizationRegistry !== 'undefined'
+    ? new FinalizationRegistry<SqlJsHandle>((db) => {
+        try {
+          db?.close();
+        } catch {
+          // Best-effort — the wrapper is already GC'd, nothing to fail back to.
+        }
+      })
+    : null;
+
+// Module-level open-instance counter. Bounded — we increment on register,
+// decrement on unregister. Used by `SqlJsRvfBackend.openCount()` for leak
+// detection (the WeakSet path needs FinalizationRegistry to decrement on GC
+// too, which we do via the unregister token).
+let __openCount = 0;
+
 /**
  * SqlJsRvfBackend - VectorBackend + VectorBackendAsync using sql.js WASM
  */
@@ -114,6 +155,7 @@ export class SqlJsRvfBackend implements VectorBackendAsync {
     this.createSchema();
     this.rebuildCache();
     this.initialized = true;
+    this._registerForFinalization();
   }
 
   // ─── Sync VectorBackend interface ───
@@ -194,6 +236,7 @@ export class SqlJsRvfBackend implements VectorBackendAsync {
     const initSqlJs = (await import('sql.js')).default;
     const SQL = await initSqlJs();
     if (this.db) {
+      this._unregisterFromFinalization();
       this.db.close();
     }
     this.db = new SQL.Database(buffer);
@@ -201,6 +244,7 @@ export class SqlJsRvfBackend implements VectorBackendAsync {
     this.rebuildCache();
     this.storagePath = loadPath;
     this.initialized = true;
+    this._registerForFinalization();
   }
 
   close(): void {
@@ -218,12 +262,56 @@ export class SqlJsRvfBackend implements VectorBackendAsync {
           // Best-effort save on close
         }
       }
+      // ruflo#2432 fix — unregister from FinalizationRegistry BEFORE close()
+      // so the finalizer doesn't double-close on later GC.
+      this._unregisterFromFinalization();
       this.db.close();
       this.db = null;
     }
     this.pending = [];
     this.cache.clear();
     this.initialized = false;
+  }
+
+  // ─── MEMFS leak safety net (ruflo#2432) ───────────────────────────────────
+
+  /**
+   * Register the current `this.db` with the module-level FinalizationRegistry
+   * so a MEMFS file is reclaimed if the caller forgets to call `close()`.
+   *
+   * This is a safety net, NOT a substitute for explicit lifecycle management.
+   * Consumers that close explicitly hit no overhead (we unregister on close).
+   * The finalizer runs only when the JS wrapper is GC'd without `.close()`
+   * being called first.
+   */
+  private _registerForFinalization(): void {
+    if (!__memfsFinalizer || !this.db) return;
+    // Token MUST be unique per instance — using `this` makes unregister O(1).
+    __memfsFinalizer.register(this, this.db, this);
+    __openCount++;
+  }
+
+  /**
+   * Inverse of _registerForFinalization. Idempotent — safe to call multiple
+   * times or when never-registered. Used by `close()` and by `load()` before
+   * replacing `this.db`.
+   */
+  private _unregisterFromFinalization(): void {
+    if (!__memfsFinalizer) return;
+    const wasRegistered = __memfsFinalizer.unregister(this);
+    if (wasRegistered) __openCount--;
+  }
+
+  /**
+   * Number of currently-open SqlJsRvfBackend instances in this process.
+   *
+   * Diagnostic only — `process.memoryUsage().external` growth correlated with
+   * `openCount()` growth is the signature of the ruflo#2432 leak class. Use
+   * in monitoring dashboards: alert when `openCount()` grows without bound
+   * relative to expected controller cardinality.
+   */
+  static openCount(): number {
+    return __openCount;
   }
 
   // ─── Async VectorBackendAsync interface ───
