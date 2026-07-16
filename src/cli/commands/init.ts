@@ -4,9 +4,6 @@
 
 import { detectBackend, formatDetectionResult, type DetectionResult } from '../../backends/detector.js';
 import { createDatabase } from '../../db-fallback.js';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 
 // Color codes for beautiful output
 const colors = {
@@ -99,24 +96,19 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     db.pragma('synchronous = NORMAL');
     db.pragma('cache_size = -64000');
 
-    // Load schemas (use package dist directory, not cwd)
-    // When running from dist/src/cli/commands/init.js, schemas are in dist/schemas/
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    // __dirname is dist/src/cli/commands, so go up 3 levels to dist/
-    const distDir = path.join(__dirname, '../../..');
-    const basePath = path.join(distDir, 'schemas');
-    const schemaFiles = ['schema.sql', 'frontier-schema.sql'];
-
-    for (const schemaFile of schemaFiles) {
-      const schemaPath = path.join(basePath, schemaFile);
-      if (fs.existsSync(schemaPath)) {
-        const schema = fs.readFileSync(schemaPath, 'utf-8');
-        db.exec(schema);
-      } else {
-        console.warn(`${colors.yellow}⚠ Warning: Schema file not found: ${schemaPath}${colors.reset}`);
-      }
+    // Load both schemas from the inlined constants — bundled into the package,
+    // so globally-installed CLIs and weird __dirname resolutions just work.
+    // (Was a dist/schemas/*.sql read that silently produced a table-less
+    // database whenever those files weren't published. #1)
+    const { SCHEMA_SQL, FRONTIER_SCHEMA_SQL } = await import('../../schemas/inline.js');
+    if (!SCHEMA_SQL) {
+      throw new Error(
+        'Bundled schema is empty or missing — the package build is incomplete. ' +
+        'Refusing to create a database with no tables.'
+      );
     }
+    db.exec(SCHEMA_SQL);
+    if (FRONTIER_SCHEMA_SQL) db.exec(FRONTIER_SCHEMA_SQL);
 
     // Store backend configuration
     db.prepare(`
