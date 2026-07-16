@@ -313,11 +313,14 @@ describe('Backend Parity Tests', () => {
     it('should handle zero-vector queries without errors', async () => {
       const zeroVector = new Float32Array(DIMENSION); // All zeros
 
-      await expect(async () => {
-        await hnswIndex.search(zeroVector, K_RESULTS);
-      }).rejects.toThrow(); // HNSW may error on zero vectors
+      // Both backends handle a degenerate query rather than throw, which is
+      // what this test's name — and the WASM half below — ask for. The old
+      // assertion demanded the opposite of hnswIndex ("HNSW may error on zero
+      // vectors"), pinning a maybe as a requirement; in a parity suite the
+      // point is that the two agree.
+      const hnswResults = await hnswIndex.search(zeroVector, K_RESULTS);
+      expect(Array.isArray(hnswResults)).toBe(true);
 
-      // WASM should handle gracefully
       const wasmResults = await wasmSearch.findKNN(zeroVector, K_RESULTS);
       expect(Array.isArray(wasmResults)).toBe(true);
     });

@@ -301,7 +301,16 @@ export class HNSWIndex {
 
     try {
       // Perform HNSW search (convert Float32Array to number[])
-      const result = this.index.searchKnn(Array.from(query), k);
+      // hnswlib throws if k exceeds what the index holds. Asking for more
+      // neighbours than exist is ordinary — a young index, or a caller with a
+      // fixed k — and should return what there is rather than fail the query.
+      const available = this.index.getCurrentCount();
+      if (available === 0) {
+        return [];
+      }
+      const safeK = Math.max(1, Math.min(Math.floor(k), available));
+
+      const result = this.index.searchKnn(Array.from(query), safeK);
 
       const searchTime = Date.now() - searchStart;
       this.lastSearchTime = searchTime;

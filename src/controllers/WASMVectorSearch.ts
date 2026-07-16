@@ -318,12 +318,28 @@ export class WASMVectorSearch {
   async findKNN(
     query: Float32Array,
     k: number,
-    tableName: string = 'pattern_embeddings',
-    options?: {
+    tableNameOrOptions?: string | {
+      threshold?: number;
+      filters?: Record<string, any>;
+    },
+    maybeOptions?: {
       threshold?: number;
       filters?: Record<string, any>;
     }
   ): Promise<VectorSearchResult[]> {
+    // The third parameter used to be tableName only, while the sibling API
+    // HNSWIndex.search(query, k, options) takes options there. Passing options
+    // third — the natural thing, and what the parity tests do — silently put
+    // them in the tableName slot: filtering was skipped (threshold fell back
+    // to 0) and the table name became an object, which only survives because a
+    // mock ignores the SQL. Accept either shape.
+    const tableName =
+      typeof tableNameOrOptions === 'string' ? tableNameOrOptions : 'pattern_embeddings';
+    const options =
+      typeof tableNameOrOptions === 'object' && tableNameOrOptions !== null
+        ? tableNameOrOptions
+        : maybeOptions;
+
     const threshold = options?.threshold ?? 0.0;
 
     // Build WHERE clause for filters
