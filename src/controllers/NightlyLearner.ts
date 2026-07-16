@@ -408,7 +408,9 @@ export class NightlyLearner {
           }
         };
 
-        this.causalGraph.addCausalEdge(edge);
+        // Await before counting it as discovered — a rejected insert would
+        // otherwise be an unhandled rejection and still bump the tally.
+        await this.causalGraph.addCausalEdge(edge);
         discovered++;
       }
     }

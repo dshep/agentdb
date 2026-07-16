@@ -224,8 +224,8 @@ describe('Core Features Regression Tests', () => {
   });
 
   describe('Causal Memory Graph', () => {
-    it('should add causal edges', () => {
-      const edgeId = causalGraph.addCausalEdge({
+    it('should add causal edges', async () => {
+      const edgeId = await causalGraph.addCausalEdge({
         fromMemoryId: 1,
         fromMemoryType: 'episode',
         toMemoryId: 2,

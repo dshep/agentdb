@@ -358,7 +358,10 @@ class AgentDBCLI {
     log.info(`Effect: ${params.effect}`);
     log.info(`Uplift: ${params.uplift}`);
 
-    const edgeId = this.causalGraph.addCausalEdge({
+    // addCausalEdge is async — unawaited, this logged "edge #[object Promise]"
+    // and any insert failure surfaced as an unhandled rejection while the CLI
+    // still reported success.
+    const edgeId = await this.causalGraph.addCausalEdge({
       fromMemoryId: 1,
       fromMemoryType: 'episode',
       toMemoryId: 2,

@@ -1236,7 +1236,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const confidence = (args?.confidence as number) || 0.95;
         const sampleSize = (args?.sample_size as number) || 0;
 
-        const edgeId = causalGraph.addCausalEdge({
+        // async — unawaited this returns a Promise, not the edge id.
+        const edgeId = await causalGraph.addCausalEdge({
           fromMemoryId: 0,
           fromMemoryType: cause as 'episode' | 'skill' | 'note' | 'fact',
           toMemoryId: 0,
