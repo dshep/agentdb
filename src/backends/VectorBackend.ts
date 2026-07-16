@@ -190,3 +190,26 @@ export interface VectorBackendAsync extends VectorBackend {
   /** Flush any pending writes (for backends that batch sync calls) */
   flush(): Promise<void>;
 }
+
+/**
+ * Search a vector backend through whichever surface it actually supports.
+ *
+ * Async-native backends (RuVector, RVF) cannot answer a synchronous search:
+ * the engine returns promises, and their sync search() throws rather than
+ * pretend the index is empty. Backends like HNSWLib are genuinely sync.
+ * Dispatch on capability instead of assuming either — every caller that
+ * hardcoded backend.search() broke the moment an async-native backend was
+ * wired in.
+ */
+export async function searchBackend(
+  backend: VectorBackend,
+  query: Float32Array,
+  k: number,
+  options?: SearchOptions
+): Promise<SearchResult[]> {
+  const maybeAsync = backend as Partial<VectorBackendAsync>;
+  if (typeof maybeAsync.searchAsync === 'function') {
+    return maybeAsync.searchAsync(query, k, options);
+  }
+  return backend.search(query, k, options);
+}

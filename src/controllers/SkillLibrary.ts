@@ -15,6 +15,7 @@ import { VectorBackend } from '../backends/VectorBackend.js';
 import type { GraphDatabaseAdapter } from '../backends/graph/GraphDatabaseAdapter.js';
 import { NodeIdMapper } from '../utils/NodeIdMapper.js';
 import { QueryCache, type QueryCacheConfig } from '../core/QueryCache.js';
+import { searchBackend } from '../backends/VectorBackend.js';
 
 /** Parse JSON from DB row values without throwing on malformed data. */
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
@@ -263,7 +264,7 @@ export class SkillLibrary {
 
     // Use VectorBackend for semantic search (if available)
     if (this.vectorBackend) {
-      const searchResults = this.vectorBackend.search(queryEmbedding, k * 3);
+      const searchResults = await searchBackend(this.vectorBackend, queryEmbedding, k * 3);
 
       // Map results back to skill IDs and fetch full skill data
       const skillsWithSimilarity: (Skill & { similarity: number })[] = [];

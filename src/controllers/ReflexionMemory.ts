@@ -12,6 +12,7 @@ import type { IDatabaseConnection, DatabaseRows } from '../types/database.types.
 import { normalizeRowId } from '../types/database.types.js';
 import { EmbeddingService } from './EmbeddingService.js';
 import type { VectorBackend } from '../backends/VectorBackend.js';
+import { searchBackend } from '../backends/VectorBackend.js';
 import type { LearningBackend } from '../backends/LearningBackend.js';
 import type { GraphBackend, GraphNode } from '../backends/GraphBackend.js';
 import type { GraphDatabaseAdapter } from '../backends/graph/GraphDatabaseAdapter.js';
@@ -1007,7 +1008,7 @@ export class ReflexionMemory {
 
     try {
       // Get initial neighbors
-      const initialResults = this.vectorBackend.search(queryEmbedding, k * 2, {
+      const initialResults = await searchBackend(this.vectorBackend, queryEmbedding, k * 2, {
         threshold: 0.0,
       });
 
