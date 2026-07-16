@@ -501,6 +501,12 @@ describe('HNSW Backend Tests', () => {
         indexPath,
       });
 
+      // hnswlib is lazy-loaded, so a persisted index cannot be read in the
+      // constructor — it is deferred to initialize(), which search() awaits.
+      // getStats() is synchronous and cannot trigger it, so inspecting a
+      // freshly-constructed instance saw indexBuilt: false regardless of what
+      // was on disk. initialize() is public and idempotent.
+      await index2.initialize();
       const stats2 = index2.getStats();
 
       expect(stats2.indexBuilt).toBe(true);

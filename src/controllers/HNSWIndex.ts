@@ -297,7 +297,11 @@ export class HNSWIndex {
       throw new Error('Index not built. Call buildIndex() first.');
     }
 
-    const searchStart = Date.now();
+    // performance.now(), not Date.now(): a search over a modest index finishes
+    // inside a millisecond, so integer-millisecond timing recorded 0 and
+    // avgSearchTimeMs/lastSearchTime were permanently 0 — a statistic that
+    // could never report anything useful.
+    const searchStart = performance.now();
 
     try {
       // Perform HNSW search (convert Float32Array to number[])
@@ -312,7 +316,7 @@ export class HNSWIndex {
 
       const result = this.index.searchKnn(Array.from(query), safeK);
 
-      const searchTime = Date.now() - searchStart;
+      const searchTime = performance.now() - searchStart;
       this.lastSearchTime = searchTime;
       this.totalSearches++;
       this.totalSearchTime += searchTime;
@@ -430,8 +434,10 @@ export class HNSWIndex {
         fs.mkdirSync(indexDir, { recursive: true });
       }
 
-      // Save HNSW index
-      this.index.writeIndex(this.config.indexPath);
+      // Save HNSW index. writeIndex is async (writeIndexSync is the sync
+      // pair) — unawaited, saveIndex() resolved before the file existed, so a
+      // later load found nothing.
+      await this.index.writeIndex(this.config.indexPath);
 
       // Save mappings
       const mappingsPath = this.config.indexPath + '.mappings.json';
@@ -464,9 +470,10 @@ export class HNSWIndex {
       // Lazy-load hnswlib-node first
       await loadHnswlib();
 
-      // Load HNSW index
+      // Load HNSW index. readIndex is async; unawaited, the next line ran
+      // against an unloaded index.
       this.index = new HierarchicalNSW(this.config.metric, this.config.dimension);
-      this.index.readIndex(this.config.indexPath);
+      await this.index.readIndex(this.config.indexPath);
       this.index.setEf(this.config.efSearch);
 
       // Load mappings
