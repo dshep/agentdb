@@ -357,8 +357,11 @@ export class ReflexionMemory {
   ): Promise<EpisodeWithEmbedding[]> {
     const { k = 5, minReward, onlyFailures, onlySuccesses, timeWindowDays } = query;
 
-    // Get candidates from vector backend
-    const searchResults = this.vectorBackend!.search(queryEmbedding, k * 3, {
+    // Get candidates from vector backend. Async-native backends (RuVector,
+    // RVF) can only answer through searchAsync() — their sync search() throws
+    // rather than pretend the index is empty, so prefer the async surface
+    // whenever the backend offers it.
+    const searchResults = await this.searchVectorBackend(queryEmbedding, k * 3, {
       threshold: 0.0,
     });
 
@@ -391,6 +394,29 @@ export class ReflexionMemory {
     }
 
     return episodes;
+  }
+
+  /**
+   * Search the vector backend, using its async surface when it has one.
+   *
+   * RuVector and RVF are async-native; their sync search() cannot work and
+   * throws. Backends like HNSWLib are genuinely sync. Dispatch on capability
+   * rather than assuming either.
+   */
+  private async searchVectorBackend(
+    queryEmbedding: Float32Array,
+    k: number,
+    options: { threshold: number }
+  ): Promise<Array<{ id: string; similarity: number }>> {
+    const backend = this.vectorBackend as unknown as {
+      searchAsync?: (q: Float32Array, k: number, o?: unknown) => Promise<Array<{ id: string; similarity: number }>>;
+      search: (q: Float32Array, k: number, o?: unknown) => Array<{ id: string; similarity: number }>;
+    };
+
+    if (typeof backend.searchAsync === 'function') {
+      return backend.searchAsync(queryEmbedding, k, options);
+    }
+    return backend.search(queryEmbedding, k, options);
   }
 
   /**

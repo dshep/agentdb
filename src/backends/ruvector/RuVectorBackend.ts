@@ -17,7 +17,7 @@
  * - Statistics tracking for performance monitoring
  */
 
-import type { VectorBackend, VectorConfig, SearchResult, SearchOptions, VectorStats } from '../VectorBackend.js';
+import type { VectorBackend, VectorBackendAsync, VectorConfig, SearchResult, SearchOptions, VectorStats } from '../VectorBackend.js';
 
 // ============================================================================
 // Performance & Security Constants
@@ -219,12 +219,23 @@ export interface RuVectorConfig extends VectorConfig {
   enableStats?: boolean;
 }
 
-export class RuVectorBackend implements VectorBackend {
+export class RuVectorBackend implements VectorBackendAsync {
   readonly name = 'ruvector' as const;
-  private db: any; // VectorDB from @ruvector/core
+  private db: any; // VectorDB from `ruvector` (or @ruvector/core)
   private config: RuVectorConfig;
   private metadata: Map<string, Record<string, any>> = new Map();
   private initialized = false;
+
+  /**
+   * In-flight writes from the sync insert()/remove() path.
+   *
+   * The underlying VectorDB is async-only (insert/search/delete all return
+   * promises), but the sync VectorBackend interface cannot await. Sync writes
+   * are therefore fire-and-forget; we retain their promises so searchAsync()
+   * and flush() can settle them first, otherwise a read races its own writes
+   * and silently misses them.
+   */
+  private pendingWrites: Array<Promise<unknown>> = [];
 
   // Concurrency control
   private semaphore: Semaphore;
@@ -307,10 +318,13 @@ export class RuVectorBackend implements VectorBackend {
         const ruvector = await import('ruvector');
         VectorDB = ruvector.VectorDB || ruvector.default?.VectorDB;
       } catch {
-        // Fallback to @ruvector/core for backward compatibility
-        const core = await import('@ruvector/core');
-        // ESM and CommonJS both export as VectorDB (capital 'DB')
-        VectorDB = core.VectorDB || core.default?.VectorDB;
+        // Fallback to @ruvector/core for backward compatibility.
+        // Note: core exports `VectorDb` (lowercase 'b') and only aliases it to
+        // `VectorDB` in some builds — checking the alias alone resolved to
+        // undefined and reported "Could not find VectorDB export".
+        const core: any = await import('@ruvector/core');
+        const mod = core.default ?? core;
+        VectorDB = mod.VectorDB ?? mod.VectorDb ?? core.VectorDB ?? core.VectorDb;
       }
 
       if (!VectorDB) {
@@ -480,13 +494,17 @@ export class RuVectorBackend implements VectorBackend {
 
     const startTime = this.config.enableStats !== false ? performance.now() : 0;
 
-    // RuVector v0.1.30+ uses object API with 'vector' field
-    // Native VectorDB requires Float32Array, not regular array
-    this.db.insert({
-      id: id,
-      vector: embedding instanceof Float32Array ? embedding : new Float32Array(embedding),
-      metadata: metadata
-    });
+    // VectorDB.insert() is async. The sync interface can't await it, so track
+    // the promise for flush()/searchAsync() to settle. Dropping it here is what
+    // made writes race — and silently lose to — subsequent reads.
+    this.trackWrite(
+      this.db.insert({
+        id: id,
+        vector: embedding instanceof Float32Array ? embedding : new Float32Array(embedding),
+        metadata: metadata
+      }),
+      'insert'
+    );
 
     if (metadata) {
       this.metadata.set(id, metadata);
@@ -602,20 +620,39 @@ export class RuVectorBackend implements VectorBackend {
    * Search for k-nearest neighbors with optional filtering and early termination
    * @inline V8 optimization hint - hot path function
    */
-  search(query: Float32Array, k: number, options?: SearchOptions): SearchResult[] {
+  search(_query: Float32Array, _k: number, _options?: SearchOptions): SearchResult[] {
+    // VectorDB.search() returns a Promise and there is no sync equivalent, so
+    // this method cannot be honoured. It used to call the async method without
+    // awaiting and read `.length` off the returned Promise — `undefined | 0`
+    // is 0, so it silently returned [] for every query, forever. Failing
+    // loudly is strictly better than pretending the index is empty.
+    throw new Error(
+      'RuVector backend is async-only for search. Use searchAsync() or the VectorBackendAsync interface.'
+    );
+  }
+
+  /**
+   * k-NN search against the RuVector index.
+   *
+   * Settles any in-flight sync writes first so a store-then-search sequence
+   * sees its own data.
+   */
+  async searchAsync(query: Float32Array, k: number, options?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
 
     const startTime = this.config.enableStats !== false ? performance.now() : 0;
 
-    // Apply efSearch parameter if provided
-    if (options?.efSearch) {
+    // Pending sync inserts must land before we read, or we search a stale index.
+    await this.flush();
+
+    // `setEfSearch` is not part of the VectorDB surface in every build —
+    // initialize() already feature-checks it, so do the same here rather than
+    // throwing TypeError on an efSearch option.
+    if (options?.efSearch && typeof this.db.setEfSearch === 'function') {
       this.db.setEfSearch(options.efSearch);
     }
 
-    // RuVector v0.1.30+ supports both object API and legacy positional args
-    // Use object API for consistency with insert
-    // Native VectorDB requires Float32Array, not regular array
-    const results = this.db.search({
+    const results = await this.db.search({
       vector: query instanceof Float32Array ? query : new Float32Array(query),
       k: k,
       threshold: options?.threshold,
@@ -632,8 +669,12 @@ export class RuVectorBackend implements VectorBackend {
     const resultsLen = results.length | 0;
 
     for (let i = 0; i < resultsLen; i++) {
-      const r = results[i] as { id: string; distance: number };
-      const similarity = this.distanceToSimilarity(r.distance);
+      // VectorDB returns { id, score } where score is the distance under the
+      // configured metric (0 == identical). It has no `distance` field —
+      // reading one yielded undefined, so every similarity came out NaN.
+      const r = results[i] as { id: string; score?: number; distance?: number };
+      const distance = r.score ?? r.distance ?? 0;
+      const similarity = this.distanceToSimilarity(distance);
 
       // Apply similarity threshold
       if (options?.threshold && similarity < options.threshold) {
@@ -658,7 +699,7 @@ export class RuVectorBackend implements VectorBackend {
 
       filteredResults.push({
         id: r.id,
-        distance: r.distance,
+        distance,
         similarity,
         metadata
       });
@@ -684,6 +725,86 @@ export class RuVectorBackend implements VectorBackend {
     return filteredResults;
   }
 
+  // ─── VectorBackendAsync: native async surface ───────────────────────────
+  // VectorDB is async-native. These methods are the honest interface to it;
+  // the sync ones above exist only for VectorBackend compatibility.
+
+  /** Retain an in-flight write so flush() can settle it. */
+  private trackWrite(p: unknown, op: string): void {
+    if (!(p instanceof Promise)) return;
+    const tracked = p.catch((err: Error) => {
+      // Surface rather than swallow — an unhandled rejection here previously
+      // just vanished, leaving the index quietly short of the data.
+      console.error(`[RuVectorBackend] ${op} failed:`, err.message);
+    });
+    this.pendingWrites.push(tracked);
+    // Bound the queue: drop settled promises once it grows.
+    if (this.pendingWrites.length > 1000) {
+      void this.flush();
+    }
+  }
+
+  /** Settle every in-flight sync write. */
+  async flush(): Promise<void> {
+    if (this.pendingWrites.length === 0) return;
+    const inFlight = this.pendingWrites;
+    this.pendingWrites = [];
+    await Promise.all(inFlight);
+  }
+
+  async insertAsync(id: string, embedding: Float32Array, metadata?: Record<string, unknown>): Promise<void> {
+    this.ensureInitialized();
+    if (!id || typeof id !== 'string') {
+      throw new Error('Vector ID must be a non-empty string');
+    }
+    if (!(embedding instanceof Float32Array) && !Array.isArray(embedding)) {
+      throw new Error('Embedding must be a Float32Array or array');
+    }
+    await this.db.insert({
+      id,
+      vector: embedding instanceof Float32Array ? embedding : new Float32Array(embedding),
+      metadata
+    });
+    if (metadata) {
+      this.metadata.set(id, metadata as Record<string, any>);
+    }
+  }
+
+  async insertBatchAsync(
+    items: Array<{ id: string; embedding: Float32Array; metadata?: Record<string, unknown> }>
+  ): Promise<void> {
+    this.ensureInitialized();
+    if (items.length === 0) return;
+    await this.db.insertBatch(
+      items.map((it) => ({
+        id: it.id,
+        vector: it.embedding instanceof Float32Array ? it.embedding : new Float32Array(it.embedding),
+        metadata: it.metadata
+      }))
+    );
+    for (const it of items) {
+      if (it.metadata) this.metadata.set(it.id, it.metadata as Record<string, any>);
+    }
+  }
+
+  async removeAsync(id: string): Promise<boolean> {
+    this.ensureInitialized();
+    this.metadata.delete(id);
+    return (await this.db.delete(id)) !== false;
+  }
+
+  async getStatsAsync(): Promise<VectorStats> {
+    this.ensureInitialized();
+    await this.flush();
+    const stats = this.getStats();
+    // len() is the real count API; getStats() reads this.db.count(), which
+    // does not exist on VectorDB and throws.
+    if (typeof this.db.len === 'function') {
+      stats.count = await this.db.len();
+    }
+    return stats;
+  }
+
   /**
    * Remove vector by ID
    */
@@ -693,8 +814,13 @@ export class RuVectorBackend implements VectorBackend {
     this.metadata.delete(id);
 
     try {
-      return this.db.remove(id);
-    } catch {
+      // The method is delete(), not remove() — the old call always threw into
+      // the catch below and reported false while deleting nothing. It is also
+      // async, so queue it like the other sync writes.
+      this.trackWrite(this.db.delete(id), 'delete');
+      return true;
+    } catch (err) {
+      console.error(`[RuVectorBackend] delete failed:`, (err as Error).message);
       return false;
     }
   }
@@ -709,7 +835,10 @@ export class RuVectorBackend implements VectorBackend {
     this.stats.lastMemoryUsage = memoryUsage;
 
     return {
-      count: this.db.count(),
+      // VectorDB exposes len(), not count() — the old call threw TypeError on
+      // every getStats(). len() is async, so the sync path can only report the
+      // locally-tracked metadata size; use getStatsAsync() for a live count.
+      count: this.metadata.size,
       dimension: this.config.dimension || 384,
       metric: this.config.metric,
       backend: 'ruvector',
