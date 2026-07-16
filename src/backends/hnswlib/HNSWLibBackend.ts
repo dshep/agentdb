@@ -205,8 +205,18 @@ export class HNSWLibBackend implements VectorBackend {
       this.index.setEf(options.efSearch);
     }
 
+    // hnswlib throws if k exceeds what the index holds ("Invalid the number of
+    // k-nearest neighbors..."). Asking for more neighbours than exist is an
+    // ordinary thing to do — a young index, or a fixed k — and should return
+    // what there is, not fail the query. Clamp instead.
+    const available = this.index.getCurrentCount();
+    if (available === 0) {
+      return [];
+    }
+    const safeK = Math.max(1, Math.min(Math.floor(k), available));
+
     // Perform HNSW search
-    const result = this.index.searchKnn(Array.from(query), k);
+    const result = this.index.searchKnn(Array.from(query), safeK);
 
     const results: SearchResult[] = [];
 
