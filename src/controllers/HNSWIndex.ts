@@ -140,8 +140,20 @@ export class HNSWIndex {
   private pendingPersistentLoad: boolean = false;
   private initializePromise: Promise<void> | null = null;
 
-  constructor(db: Database, config?: Partial<HNSWConfig>) {
+  constructor(db: Database, config?: Partial<HNSWConfig> & { dimensions?: number }) {
     this.db = db;
+
+    // Accept 'dimensions' as well as 'dimension', as RuVectorBackend and
+    // VectorConfig already do. Without it, `dimensions: 384` silently fell
+    // through to the 1536 default and the index rejected every vector with
+    // "Invalid the given array length (expected 1536, but got 384)" — a
+    // failure that names neither the option nor the typo behind it.
+    const { dimensions, ...rest } = config ?? {};
+    const resolved: Partial<HNSWConfig> = { ...rest };
+    if (resolved.dimension === undefined && dimensions !== undefined) {
+      resolved.dimension = dimensions;
+    }
+
     this.config = {
       M: 16,
       efConstruction: 200,
@@ -151,7 +163,7 @@ export class HNSWIndex {
       maxElements: 100000,
       persistIndex: true,
       rebuildThreshold: 0.1, // Rebuild after 10% updates
-      ...config,
+      ...resolved,
     };
 
     // Mark for deferred loading (can't load in constructor as hnswlib is lazy-loaded)
