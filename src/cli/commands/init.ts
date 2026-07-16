@@ -24,6 +24,16 @@ interface InitOptions {
   backend?: 'auto' | 'ruvector' | 'hnswlib';
   dimension?: number;
   model?: string;
+  /**
+   * Where embeddings are computed:
+   *   'transformers' — locally, in-process (default)
+   *   'openai'       — remotely, via api.openai.com; needs OPENAI_API_KEY
+   *   'local'        — hash stub, for tests only
+   *
+   * Recorded so later commands don't try to load, say, an OpenAI model
+   * through transformers.js.
+   */
+  provider?: 'transformers' | 'openai' | 'local';
   preset?: 'small' | 'medium' | 'large';
   inMemory?: boolean;
   dryRun?: boolean;
@@ -44,6 +54,7 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     backend = 'auto',
     dimension = 384,
     model,
+    provider = 'transformers',
     preset,
     inMemory = false,
     dryRun = false,
@@ -78,13 +89,46 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     // Determine actual database path (handle in-memory)
     const actualDbPath = inMemory ? ':memory:' : dbPath;
 
-    // Determine embedding model (with dimension-aware defaults)
-    const embeddingModel = model || (dimension === 768 ? 'Xenova/bge-base-en-v1.5' : 'Xenova/all-MiniLM-L6-v2');
+    // Determine embedding model (with provider- and dimension-aware defaults)
+    const embeddingModel =
+      model ||
+      (provider === 'openai'
+        ? 'text-embedding-3-small'
+        : provider === 'local'
+          ? 'mock-model'
+          : dimension === 768
+            ? 'Xenova/bge-base-en-v1.5'
+            : 'Xenova/all-MiniLM-L6-v2');
+
+    // A remote model cannot be loaded by transformers.js, and a HuggingFace id
+    // means nothing to the OpenAI API. Catch the mismatch here rather than at
+    // first use, several commands later.
+    if (provider === 'transformers' && /^text-embedding-/.test(embeddingModel)) {
+      throw new Error(
+        `Model '${embeddingModel}' is an OpenAI model and cannot run locally.\n` +
+        `Use: agentdb init --provider openai --model ${embeddingModel} --dimension 1536\n` +
+        `(and set OPENAI_API_KEY), or pick a local model such as Xenova/all-MiniLM-L6-v2.`
+      );
+    }
+    if (provider === 'openai' && embeddingModel.startsWith('Xenova/')) {
+      throw new Error(
+        `Model '${embeddingModel}' is a local HuggingFace model; the OpenAI API cannot serve it.\n` +
+        `Use --provider transformers, or an OpenAI model such as text-embedding-3-small.`
+      );
+    }
 
     console.log(`\n${colors.bright}${colors.cyan}🚀 Initializing AgentDB${colors.reset}\n`);
     console.log(`  Database:      ${colors.blue}${actualDbPath}${colors.reset}`);
     console.log(`  Backend:       ${getBackendColor(selectedBackend)}${selectedBackend}${colors.reset}`);
     console.log(`  Dimension:     ${colors.blue}${dimension}${colors.reset}`);
+    console.log(
+      `  Embeddings:    ${colors.blue}${provider}${colors.reset} ` +
+      (provider === 'openai'
+        ? '(remote — sent to api.openai.com)'
+        : provider === 'local'
+          ? '(MOCK hash stub — no semantic meaning)'
+          : '(local, in-process)')
+    );
     console.log(`  Model:         ${colors.blue}${embeddingModel}${colors.reset}`);
     if (preset) {
       console.log(`  Preset:        ${colors.blue}${preset}${colors.reset}`);
@@ -141,6 +185,14 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
       INSERT OR REPLACE INTO agentdb_config (key, value)
       VALUES (?, ?)
     `).run('embedding_model', embeddingModel);
+
+    // Record where embeddings are computed. Without it, later commands assume
+    // transformers.js and try to load remote-only models (text-embedding-3-*)
+    // from HuggingFace, which cannot work.
+    db.prepare(`
+      INSERT OR REPLACE INTO agentdb_config (key, value)
+      VALUES (?, ?)
+    `).run('embedding_provider', provider);
 
     if (preset) {
       db.prepare(`

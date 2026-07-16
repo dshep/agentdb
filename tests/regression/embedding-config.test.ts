@@ -23,7 +23,7 @@
  * provider.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { EmbeddingService } from '../../src/controllers/EmbeddingService.js';
 import { AgentDB } from '../../src/core/AgentDB.js';
 
@@ -89,6 +89,51 @@ describe('mock embeddings are never substituted silently', () => {
     await svc.initialize();
     expect(svc.isUsingMockEmbeddings()).toBe(false);
     expect(svc.getActiveProvider()).toBe('transformers');
+  });
+});
+
+describe('OpenAI embedding errors are legible', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('reports HTTP failures instead of a TypeError on undefined', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: 'Incorrect API key provided' } }), {
+        status: 401,
+        statusText: 'Unauthorized'
+      })) as typeof fetch;
+
+    const svc = new EmbeddingService({
+      model: 'text-embedding-3-small',
+      dimension: 1536,
+      provider: 'openai',
+      apiKey: 'sk-invalid'
+    });
+    await svc.initialize();
+
+    // The response was parsed without checking status, so a 401 surfaced as
+    // "Cannot read properties of undefined (reading '0')".
+    await expect(svc.embed('hello')).rejects.toThrow(/HTTP 401.*Incorrect API key/is);
+  });
+
+  it('rejects a model whose dimension disagrees with the database', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [{ embedding: new Array(1536).fill(0.1) }] }), {
+        status: 200
+      })) as typeof fetch;
+
+    const svc = new EmbeddingService({
+      model: 'text-embedding-3-small',
+      dimension: 384, // wrong on purpose: the model returns 1536
+      provider: 'openai',
+      apiKey: 'sk-test'
+    });
+    await svc.initialize();
+
+    // Otherwise this fails later, inside the vector index, far from its cause.
+    await expect(svc.embed('hello')).rejects.toThrow(/dimension mismatch.*1536.*384/is);
   });
 });
 

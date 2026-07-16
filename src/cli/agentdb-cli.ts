@@ -150,7 +150,11 @@ class AgentDBCLI {
    * database made any other way legitimately lacks it — that means "no stored
    * settings", not an error.
    */
-  private readStoredEmbeddingConfig(): { model?: string; dimension?: number } {
+  private readStoredEmbeddingConfig(): {
+    model?: string;
+    dimension?: number;
+    provider?: 'transformers' | 'openai' | 'local';
+  } {
     try {
       const rows = this.db
         .prepare('SELECT key, value FROM agentdb_config')
@@ -158,9 +162,15 @@ class AgentDBCLI {
       const cfg = new Map(rows.map((r) => [r.key, r.value]));
       const rawDim = cfg.get('dimension');
       const dimension = rawDim ? parseInt(rawDim, 10) : undefined;
+      const rawProvider = cfg.get('embedding_provider');
+      const provider =
+        rawProvider === 'openai' || rawProvider === 'local' || rawProvider === 'transformers'
+          ? rawProvider
+          : undefined;
       return {
         model: cfg.get('embedding_model') || undefined,
-        dimension: Number.isFinite(dimension) ? dimension : undefined
+        dimension: Number.isFinite(dimension) ? dimension : undefined,
+        provider
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -195,7 +205,10 @@ class AgentDBCLI {
     this.embedder = new EmbeddingService({
       model: stored.model ?? 'Xenova/all-MiniLM-L6-v2',
       dimension: stored.dimension ?? 384,
-      provider: 'transformers',
+      // Honour the recorded provider. Hardcoding 'transformers' here meant a
+      // database initialised with an OpenAI model tried to fetch it from
+      // HuggingFace and failed.
+      provider: stored.provider ?? 'transformers',
       apiKey: process.env.OPENAI_API_KEY
     });
     await this.embedder.initialize();
@@ -1770,6 +1783,8 @@ async function main() {
         options.dimension = parseInt(args[++i]);
       } else if (arg === '--model' && i + 1 < args.length) {
         options.model = args[++i];
+      } else if (arg === '--provider' && i + 1 < args.length) {
+        options.provider = args[++i];
       } else if (arg === '--preset' && i + 1 < args.length) {
         options.preset = args[++i];
       } else if (arg === '--in-memory') {
@@ -3167,9 +3182,14 @@ ${colors.bright}CORE COMMANDS:${colors.reset}
   ${colors.cyan}init${colors.reset} [options]              Initialize database with backend detection
     --backend <type>           Backend: auto (default), ruvector, hnswlib
     --dimension <n>            Vector dimension (default: 384)
+    --provider <name>          Where embeddings run: transformers (default, local,
+                               in-process), openai (remote, needs OPENAI_API_KEY),
+                               local (MOCK hash stub — tests only)
     --model <name>             Embedding model (default: Xenova/all-MiniLM-L6-v2)
-                               Popular: Xenova/bge-base-en-v1.5 (768d production)
-                                        Xenova/bge-small-en-v1.5 (384d best quality)
+                               Local:  Xenova/bge-base-en-v1.5 (768d production)
+                                       Xenova/bge-small-en-v1.5 (384d best quality)
+                               OpenAI: text-embedding-3-small (1536d)
+                                       --provider openai --dimension 1536
     --dry-run                  Show detection info without initializing
     --db <path>                Database path (default: ./agentdb.db)
 

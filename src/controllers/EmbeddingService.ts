@@ -233,8 +233,42 @@ export class EmbeddingService {
       })
     });
 
-    const data = await response.json() as { data: Array<{ embedding: number[] }> };
-    return new Float32Array(data.data[0].embedding);
+    // The response was previously parsed without checking status, so an auth
+    // failure or rate limit surfaced as "Cannot read properties of undefined
+    // (reading '0')" — a TypeError that says nothing about the real problem.
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const body = (await response.json()) as { error?: { message?: string } };
+        detail = body?.error?.message ? `: ${body.error.message}` : '';
+      } catch {
+        detail = '';
+      }
+      throw new Error(
+        `OpenAI embeddings request failed (HTTP ${response.status} ${response.statusText})${detail}\n` +
+        `Model: ${this.config.model}`
+      );
+    }
+
+    const data = (await response.json()) as { data?: Array<{ embedding: number[] }> };
+    const embedding = data?.data?.[0]?.embedding;
+    if (!embedding) {
+      throw new Error(
+        `OpenAI embeddings response contained no embedding for model '${this.config.model}'.`
+      );
+    }
+
+    const vector = new Float32Array(embedding);
+    // A model/dimension mismatch otherwise fails later, inside the vector
+    // index, as an opaque error far from its cause.
+    if (vector.length !== this.config.dimension) {
+      throw new Error(
+        `Embedding dimension mismatch: model '${this.config.model}' returned ${vector.length} ` +
+        `dimensions but this database is configured for ${this.config.dimension}.\n` +
+        `Re-initialise with --dimension ${vector.length}, or choose a model that matches.`
+      );
+    }
+    return vector;
   }
 
   private mockEmbedding(text: string): Float32Array {
