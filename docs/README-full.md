@@ -2103,6 +2103,13 @@ npx agentdb init --dimension 768 --model "Xenova/bge-base-en-v1.5"
 
 The default `all-MiniLM-L6-v2` model can be bundled into a `.rvf` file and shipped with the package. This eliminates the ~23MB first-run download and enables fully offline embedding generation.
 
+> **Not bundled by default.** At ~23MB the model would dominate the package, so
+> published builds ship without it and `npm run build:model` is an opt-in step
+> for forks that want a self-contained tarball. To prepare a machine that will
+> later be offline, run `agentdb install-embeddings` once with network access —
+> it downloads the weights and verifies them, rather than deferring the fetch to
+> your first embed.
+
 **Resolution order** (automatic, no config needed):
 
 1. `AGENTDB_MODEL_PATH` env var (user override)

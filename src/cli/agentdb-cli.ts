@@ -1920,6 +1920,8 @@ async function main() {
       const arg = args[i];
       if (arg === '--global' || arg === '-g') {
         options.global = true;
+      } else if ((arg === '--model' || arg === '-m') && i + 1 < args.length) {
+        options.model = args[++i];
       }
     }
     await installEmbeddingsCommand(options);
