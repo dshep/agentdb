@@ -143,6 +143,34 @@ class AgentDBCLI {
   private quicClient?: QUICClient;
   private syncCoordinator?: SyncCoordinator;
 
+  /**
+   * Read the embedding settings `agentdb init` stored.
+   *
+   * The table is created by the init command, not the inlined schema, so a
+   * database made any other way legitimately lacks it — that means "no stored
+   * settings", not an error.
+   */
+  private readStoredEmbeddingConfig(): { model?: string; dimension?: number } {
+    try {
+      const rows = this.db
+        .prepare('SELECT key, value FROM agentdb_config')
+        .all() as Array<{ key: string; value: string }>;
+      const cfg = new Map(rows.map((r) => [r.key, r.value]));
+      const rawDim = cfg.get('dimension');
+      const dimension = rawDim ? parseInt(rawDim, 10) : undefined;
+      return {
+        model: cfg.get('embedding_model') || undefined,
+        dimension: Number.isFinite(dimension) ? dimension : undefined
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/no such table/i.test(msg)) {
+        log.warning(`Could not read agentdb_config: ${msg}`);
+      }
+      return {};
+    }
+  }
+
   async initialize(dbPath: string = './agentdb.db'): Promise<void> {
     // Initialize database
     this.db = await createDatabase(dbPath);
@@ -159,13 +187,22 @@ class AgentDBCLI {
     if (SCHEMA_SQL) this.db.exec(SCHEMA_SQL);
     if (FRONTIER_SCHEMA_SQL) this.db.exec(FRONTIER_SCHEMA_SQL);
 
-    // Initialize embedding service
+    // Honour what `agentdb init` recorded. These keys have been written since
+    // v2 but nothing ever read them back, so `init --dimension 1536 --model X`
+    // silently kept using MiniLM/384.
+    const stored = this.readStoredEmbeddingConfig();
+
     this.embedder = new EmbeddingService({
-      model: 'Xenova/all-MiniLM-L6-v2',
-      dimension: 384,
-      provider: 'transformers'
+      model: stored.model ?? 'Xenova/all-MiniLM-L6-v2',
+      dimension: stored.dimension ?? 384,
+      provider: 'transformers',
+      apiKey: process.env.OPENAI_API_KEY
     });
     await this.embedder.initialize();
+
+    if (this.embedder.isUsingMockEmbeddings()) {
+      log.warning('Embeddings are MOCK hash stubs — search results will be meaningless.');
+    }
 
     // Initialize controllers
     this.causalGraph = new CausalMemoryGraph(this.db);

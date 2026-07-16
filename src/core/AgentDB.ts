@@ -30,6 +30,44 @@ export interface AgentDBConfig {
   vectorBackend?: 'auto' | 'ruvector' | 'hnswlib';
   /** Vector dimension (default: 384 for MiniLM) */
   vectorDimension?: number;
+
+  /**
+   * How embeddings are generated. Previously hardcoded to a local MiniLM, so
+   * the 'openai' provider EmbeddingService implements was unreachable from
+   * here.
+   *
+   * Note `vectorDimension` must match the model: MiniLM is 384,
+   * text-embedding-3-small is 1536.
+   */
+  embedding?: {
+    /**
+     * 'transformers' — real local model (default).
+     * 'openai'       — remote; needs apiKey (or OPENAI_API_KEY).
+     * 'local'        — hash stub for tests, NOT a local model.
+     */
+    provider?: 'transformers' | 'openai' | 'local';
+    /** Model id. Defaults to Xenova/all-MiniLM-L6-v2 for transformers. */
+    model?: string;
+    /** Remote provider key. Falls back to OPENAI_API_KEY. */
+    apiKey?: string;
+    /**
+     * Permit silent degradation to hash stubs when the real model can't load.
+     * Off by default — see EmbeddingService.
+     */
+    allowMockFallback?: boolean;
+  };
+}
+
+/** Sensible model per provider when the caller doesn't name one. */
+function defaultModelFor(provider: 'transformers' | 'openai' | 'local'): string {
+  switch (provider) {
+    case 'openai':
+      return 'text-embedding-3-small';
+    case 'local':
+      return 'mock-model';
+    default:
+      return 'Xenova/all-MiniLM-L6-v2';
+  }
 }
 
 export class AgentDB {
@@ -59,11 +97,16 @@ export class AgentDB {
     // Load schemas
     await this.loadSchemas();
 
-    // Initialize embedder with default Xenova model
+    // Initialize embedder. Defaults to the local Xenova model, but the
+    // provider/model/key are now caller-configurable instead of hardcoded.
+    const embeddingConfig = this.config.embedding ?? {};
+    const provider = embeddingConfig.provider ?? 'transformers';
     this.embedder = new EmbeddingService({
-      model: 'Xenova/all-MiniLM-L6-v2',
+      model: embeddingConfig.model ?? defaultModelFor(provider),
       dimension: vectorDimension,
-      provider: 'transformers'
+      provider,
+      apiKey: embeddingConfig.apiKey ?? process.env.OPENAI_API_KEY,
+      allowMockFallback: embeddingConfig.allowMockFallback
     });
     await this.embedder.initialize();
 
@@ -184,5 +227,20 @@ export class AgentDB {
   // Get vector backend info
   get vectorBackendName(): string {
     return this.vectorBackend?.name || 'none';
+  }
+
+  /**
+   * What is actually generating embeddings — 'transformers', 'openai', or
+   * 'mock'. Worth checking at startup: 'mock' means hash stubs with no
+   * semantic meaning, so every recall is noise. There was previously no way
+   * to ask this from outside.
+   */
+  get embeddingProvider(): 'transformers' | 'openai' | 'mock' | 'none' {
+    return this.embedder?.getActiveProvider() ?? 'none';
+  }
+
+  /** True when embeddings are hash stubs rather than a real model. */
+  get usingMockEmbeddings(): boolean {
+    return this.embedder?.isUsingMockEmbeddings() ?? false;
   }
 }

@@ -100,9 +100,12 @@ async function setupTestContext(): Promise<TestContext> {
     db.exec(frontierSchema);
   }
 
-  // Initialize embedding service
+  // Initialize embedding service.
+  // The model id needs the 'Xenova/' prefix to resolve; without it the load
+  // failed and every test here silently ran on hash-stub embeddings while
+  // still reporting green.
   const embedder = new EmbeddingService({
-    model: 'all-MiniLM-L6-v2',
+    model: 'Xenova/all-MiniLM-L6-v2',
     dimension: 384,
     provider: 'transformers'
   });

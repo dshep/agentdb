@@ -8,8 +8,21 @@
 export interface EmbeddingConfig {
   model: string;
   dimension: number;
+  /**
+   * 'transformers' — real local model (transformers.js).
+   * 'openai'       — real remote model; requires apiKey.
+   * 'local'        — NOT a local model: deterministic hash stub for tests.
+   *                  It carries no semantic signal whatsoever.
+   */
   provider: 'transformers' | 'openai' | 'local';
   apiKey?: string;
+  /**
+   * Permit silently degrading to the hash stub when a real provider can't be
+   * reached. Off by default: a stub embedding is not a slower embedding, it is
+   * a wrong one, and every downstream similarity becomes noise. Opt in only
+   * for tests/offline work, or set AGENTDB_ALLOW_MOCK_EMBEDDINGS=1.
+   */
+  allowMockFallback?: boolean;
 }
 
 export class EmbeddingService {
@@ -17,10 +30,33 @@ export class EmbeddingService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- transformers.js pipeline has no exported type
   private pipeline: any;
   private cache: Map<string, Float32Array>;
+  /** True once we have actually fallen back to hash stubs. */
+  private usingMock: boolean;
 
   constructor(config: EmbeddingConfig) {
     this.config = config;
     this.cache = new Map();
+    // 'local' asks for the stub outright; the others only reach it by failing.
+    this.usingMock = config.provider === 'local';
+  }
+
+  /** Whether embeddings are hash stubs rather than a real model. */
+  isUsingMockEmbeddings(): boolean {
+    return this.usingMock;
+  }
+
+  /** What is actually generating vectors right now, whatever was requested. */
+  getActiveProvider(): 'transformers' | 'openai' | 'mock' {
+    if (this.usingMock) return 'mock';
+    return this.config.provider === 'openai' ? 'openai' : 'transformers';
+  }
+
+  /** Mock stubs allowed either by config or by env (for CI/offline). */
+  private mockFallbackAllowed(): boolean {
+    return (
+      this.config.allowMockFallback === true ||
+      process.env.AGENTDB_ALLOW_MOCK_EMBEDDINGS === '1'
+    );
   }
 
   /**
@@ -58,17 +94,67 @@ export class EmbeddingService {
         console.log(`Transformers.js loaded: ${this.config.model}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`Transformers.js initialization failed: ${errorMessage}`);
-        console.warn('   Falling back to mock embeddings for testing');
-        console.warn('   This is normal if:');
-        console.warn('     - Running offline/without internet access');
-        console.warn('     - Model not yet downloaded (~90MB on first use)');
-        console.warn('     - Network connectivity issues');
-        console.warn('   To use real embeddings:');
-        console.warn('     - Ensure internet connectivity for first-time model download');
-        console.warn('     - Or pre-download: npx agentdb install-embeddings');
         this.pipeline = null;
+
+        // Previously this warned once and then quietly emitted hash stubs for
+        // the rest of the process. Callers had no way to tell, so a database
+        // could fill with meaningless vectors and every recall silently return
+        // noise. Fail unless the caller has explicitly accepted stubs.
+        if (!this.mockFallbackAllowed()) {
+          throw new Error(
+            `Failed to load embedding model '${this.config.model}': ${errorMessage}\n` +
+            `\n` +
+            `Refusing to fall back to mock embeddings — they are deterministic\n` +
+            `hashes with no semantic meaning, so stored vectors and every search\n` +
+            `over them would be silently wrong.\n` +
+            `\n` +
+            `Fix one of:\n` +
+            `  - Pre-download the model:  npx agentdb install-embeddings\n` +
+            `  - Restore network access (first run fetches ~90MB)\n` +
+            `  - Use a remote provider:   provider: 'openai' with an apiKey\n` +
+            `\n` +
+            `If mock embeddings are genuinely what you want (tests/offline), opt in\n` +
+            `explicitly with allowMockFallback: true or AGENTDB_ALLOW_MOCK_EMBEDDINGS=1.`
+          );
+        }
+
+        this.usingMock = true;
+        console.warn(
+          `⚠️  [EmbeddingService] Using MOCK embeddings — '${this.config.model}' failed to load: ${errorMessage}`
+        );
+        console.warn(
+          `⚠️  Vectors are hash stubs with no semantic meaning. Search results will be noise.`
+        );
+        console.warn(
+          `⚠️  Allowed because ${this.config.allowMockFallback === true ? 'allowMockFallback: true' : 'AGENTDB_ALLOW_MOCK_EMBEDDINGS=1'} was set.`
+        );
       }
+    } else if (this.config.provider === 'openai') {
+      // Catch a missing key at startup rather than letting embed() silently
+      // route every call to the hash stub.
+      if (!this.config.apiKey) {
+        if (!this.mockFallbackAllowed()) {
+          throw new Error(
+            `Embedding provider 'openai' requires an apiKey.\n` +
+            `Pass config.apiKey or set OPENAI_API_KEY.\n` +
+            `\n` +
+            `Without it every embedding would silently be a meaningless hash stub.\n` +
+            `To accept that explicitly, set allowMockFallback: true or ` +
+            `AGENTDB_ALLOW_MOCK_EMBEDDINGS=1.`
+          );
+        }
+        this.usingMock = true;
+        console.warn(
+          `⚠️  [EmbeddingService] provider 'openai' has no apiKey — using MOCK embeddings (hash stubs, no semantic meaning).`
+        );
+      }
+    } else if (this.config.provider === 'local') {
+      // 'local' is the stub. Say so plainly — the name reads like "a local
+      // model", which is exactly backwards.
+      console.warn(
+        `⚠️  [EmbeddingService] provider 'local' generates MOCK hash embeddings with no semantic meaning. ` +
+        `Use provider: 'transformers' for a real local model.`
+      );
     }
   }
 
@@ -91,9 +177,18 @@ export class EmbeddingService {
     } else if (this.config.provider === 'openai' && this.config.apiKey) {
       // Use OpenAI API
       embedding = await this.embedOpenAI(text);
-    } else {
-      // Mock embedding for testing
+    } else if (this.usingMock) {
+      // Stub embeddings, but only where initialize() established that the
+      // caller asked for or accepted them.
       embedding = this.mockEmbedding(text);
+    } else {
+      // A real provider was configured and never initialised into a usable
+      // state. Falling through to the stub here is what made bad vectors
+      // indistinguishable from good ones.
+      throw new Error(
+        `Embedding provider '${this.config.provider}' is not ready — call initialize() first.\n` +
+        `Refusing to substitute mock embeddings silently. See allowMockFallback.`
+      );
     }
 
     // Cache result
