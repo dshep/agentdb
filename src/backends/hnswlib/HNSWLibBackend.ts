@@ -134,13 +134,32 @@ export class HNSWLibBackend implements VectorBackend {
       throw new Error('Backend not initialized. Call initialize() first.');
     }
 
-    // Check if ID already exists
-    if (this.idToLabel.has(id)) {
-      throw new Error(`Vector with ID '${id}' already exists`);
+    // Check if ID already exists. A removed id does not: remove() keeps the
+    // idToLabel mapping on purpose (hnswlib can't reclaim a label without a
+    // rebuild) and only tombstones the id, so treating the leftover mapping as
+    // "exists" made reinsertion impossible — despite the last line of this very
+    // method existing to support it.
+    const existingLabel = this.idToLabel.get(id);
+    if (existingLabel !== undefined) {
+      if (!this.deletedIds.has(id)) {
+        throw new Error(`Vector with ID '${id}' already exists`);
+      }
+      // Reinserting a removed id: drop the tombstoned label's reverse mapping
+      // so search can never resolve the old vector back to this id.
+      this.labelToId.delete(existingLabel);
     }
 
     // Allocate numeric label
     const label = this.nextLabel++;
+
+    // Grow the index rather than failing when it fills. maxElements is a
+    // starting capacity, not a quota the caller is expected to predict — and
+    // hnswlib's own error ("The number of elements exceeds the specified
+    // limit") gives a caller no way to recover mid-insert.
+    const capacity = this.index.getMaxElements();
+    if (this.index.getCurrentCount() >= capacity) {
+      this.index.resizeIndex(Math.max(capacity * 2, capacity + 1));
+    }
 
     // Add to index (hnswlib requires number[] not Float32Array)
     this.index.addPoint(Array.from(embedding), label);
@@ -282,7 +301,9 @@ export class HNSWLibBackend implements VectorBackend {
       }
 
       // Save HNSW index
-      this.index.writeIndex(savePath);
+      // writeIndex is async (readIndexSync/writeIndexSync are the sync pair).
+      // Unawaited, save() resolved before the file was written.
+      await this.index.writeIndex(savePath);
 
       // Save mappings and metadata
       const mappingsPath = savePath + '.mappings.json';
@@ -328,7 +349,10 @@ export class HNSWLibBackend implements VectorBackend {
       this.index = new HierarchicalNSW(metric, this.config.dimension);
 
       // Load HNSW index
-      this.index.readIndex(loadPath);
+      // readIndex is async. Unawaited, the very next line ran against an
+      // unloaded index: "Search index has not been initialized, call
+      // `initIndex` in advance."
+      await this.index.readIndex(loadPath);
       this.index.setEf(this.config.efSearch!);
 
       // Load mappings and metadata
