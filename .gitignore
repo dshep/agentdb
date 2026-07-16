@@ -45,3 +45,4 @@ data/*
 # RuVector index sidecars — one per database, created next to the .db file
 *.vectors
 ruvector.db
+:memory:
