@@ -3212,8 +3212,36 @@ async function handleImportCommand(args: string[]) {
 }
 
 // Stats command - show database statistics
+/**
+ * Pick the database path out of an argv tail.
+ *
+ * Taking args[0] blindly meant any flag became the path: `stats --format json`
+ * opened a database literally named "--format" and left that file, plus its
+ * -wal and -shm siblings, in the caller's working directory.
+ */
+function resolveDbPathArg(args: string[], fallback = './agentdb.db'): string {
+  // Flags that consume the following token, so it isn't mistaken for a path.
+  const valueFlags = new Set(['--db', '--format', '-f', '--limit', '-k']);
+  let found: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--db' && args[i + 1]) {
+      return args[i + 1];
+    }
+    if (valueFlags.has(arg)) {
+      i++; // skip its value
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    if (!found) found = arg;
+  }
+
+  return found || process.env.AGENTDB_PATH || fallback;
+}
+
 async function handleStatsCommand(args: string[]) {
-  const dbPath = args[0] || './agentdb.db';
+  const dbPath = resolveDbPathArg(args);
 
   log.info(`Getting statistics for: ${dbPath}`);
 
