@@ -43,7 +43,7 @@ export async function getDatabaseImplementation(): Promise<any> {
       if (typeof BetterSqlite3 === 'function') {
         cachedImpl = BetterSqlite3;
         cachedImplKind = 'better-sqlite3';
-        console.log('✅ Using native better-sqlite3');
+        console.error('✅ Using native better-sqlite3');
         return cachedImpl;
       }
     } catch {
@@ -53,7 +53,7 @@ export async function getDatabaseImplementation(): Promise<any> {
 
   // 2. Fall back to sql.js (WASM, no build tools).
   try {
-    console.log('✅ Using sql.js (WASM SQLite, no build tools required)');
+    console.error('✅ Using sql.js (WASM SQLite, no build tools required)');
 
     // sql.js requires async initialization
     const mod = await import('sql.js');

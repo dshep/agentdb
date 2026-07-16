@@ -102,7 +102,7 @@ describe('Build Validation Tests', () => {
     });
 
     it('should resolve CLI import', async () => {
-      const cliModule = await import('../../dist/cli/agentdb-cli.js');
+      const cliModule = await import('../../dist/src/cli/agentdb-cli.js');
       expect(cliModule).toHaveProperty('AgentDBCLI');
     });
 
@@ -139,7 +139,7 @@ describe('Build Validation Tests', () => {
       );
 
       expect(packageJson.bin).toHaveProperty('agentdb');
-      expect(packageJson.bin.agentdb).toBe('dist/cli/agentdb-cli.js');
+      expect(packageJson.bin.agentdb).toBe('dist/src/cli/agentdb-cli.js');
     });
 
     it('should have correct exports configuration', () => {

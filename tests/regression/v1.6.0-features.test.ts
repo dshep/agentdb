@@ -15,7 +15,7 @@ describe('v1.6.0 New Features Regression Tests', () => {
   const testDbPath = './test-v160-features.db';
   const exportPath = './test-export.json';
   const importPath = './test-import.db';
-  const cliPath = path.join(__dirname, '../../dist/cli/agentdb-cli.js');
+  const cliPath = path.join(__dirname, '../../dist/src/cli/agentdb-cli.js');
 
   beforeAll(() => {
     // Clean up any existing test files
@@ -46,7 +46,10 @@ describe('v1.6.0 New Features Regression Tests', () => {
   describe('Init Command Enhancements', () => {
     it('should support --dimension flag', async () => {
       const output = await runCLI(['init', './test-dimension.db', '--dimension', '768']);
-      expect(output).toContain('Embedding dimension: 768');
+      // v2 init prints an aligned summary; assert the flag took effect rather
+      // than the exact prose of the old, now-dead handleInitCommand.
+      expect(output).toContain('Dimension:');
+      expect(output).toContain('768');
       expect(output).toContain('initialized successfully');
 
       // Cleanup
@@ -57,7 +60,8 @@ describe('v1.6.0 New Features Regression Tests', () => {
 
     it('should support --preset flag (small)', async () => {
       const output = await runCLI(['init', './test-preset-small.db', '--preset', 'small']);
-      expect(output).toContain('SMALL preset');
+      expect(output).toContain('Preset:');
+      expect(output).toContain('small');
       expect(output).toContain('initialized successfully');
 
       // Cleanup
@@ -68,7 +72,8 @@ describe('v1.6.0 New Features Regression Tests', () => {
 
     it('should support --preset flag (medium)', async () => {
       const output = await runCLI(['init', './test-preset-medium.db', '--preset', 'medium']);
-      expect(output).toContain('MEDIUM preset');
+      expect(output).toContain('Preset:');
+      expect(output).toContain('medium');
       expect(output).toContain('initialized successfully');
 
       // Cleanup
@@ -79,7 +84,8 @@ describe('v1.6.0 New Features Regression Tests', () => {
 
     it('should support --preset flag (large)', async () => {
       const output = await runCLI(['init', './test-preset-large.db', '--preset', 'large']);
-      expect(output).toContain('LARGE preset');
+      expect(output).toContain('Preset:');
+      expect(output).toContain('large');
       expect(output).toContain('initialized successfully');
 
       // Cleanup
@@ -369,7 +375,7 @@ describe('v1.6.0 New Features Regression Tests', () => {
  */
 async function runCLI(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const cliPath = path.join(__dirname, '../../dist/cli/agentdb-cli.js');
+    const cliPath = path.join(__dirname, '../../dist/src/cli/agentdb-cli.js');
 
     const child = spawn('node', [cliPath, ...args], {
       env: { ...process.env, AGENTDB_PATH: './test-cli.db' }

@@ -60,7 +60,13 @@ const log = {
   error: (msg: string) => console.error(`${colors.red}❌ ${msg}${colors.reset}`),
   info: (msg: string) => console.log(`${colors.blue}ℹ ${msg}${colors.reset}`),
   warning: (msg: string) => console.log(`${colors.yellow}⚠ ${msg}${colors.reset}`),
-  header: (msg: string) => console.log(`${colors.bright}${colors.cyan}${msg}${colors.reset}`)
+  header: (msg: string) => console.log(`${colors.bright}${colors.cyan}${msg}${colors.reset}`),
+  /**
+   * Setup/diagnostic chatter — which backend loaded, index rebuilds, and so
+   * on. Goes to stderr so it stays visible to a human without corrupting
+   * stdout, which commands like `vector-search` emit machine-readable JSON on.
+   */
+  diag: (msg: string) => console.error(`${colors.blue}ℹ ${msg}${colors.reset}`)
 };
 
 // Spinner utility for progress indication
@@ -246,7 +252,7 @@ class AgentDBCLI {
     await this.embedder.initialize();
 
     if (this.embedder.isUsingMockEmbeddings()) {
-      log.warning('Embeddings are MOCK hash stubs — search results will be meaningless.');
+      log.diag('⚠ Embeddings are MOCK hash stubs — search results will be meaningless.');
     }
 
     // Initialize the vector backend (RuVector/RVF/HNSWLib) so retrieval uses
@@ -282,7 +288,7 @@ class AgentDBCLI {
     // durable tables first (issue #129).
     if (this.vectorBackend) {
       const n = await this.reflexion.rebuildIndex();
-      if (n > 0) log.info(`Rebuilt vector index from ${n} stored episode(s)`);
+      if (n > 0) log.diag(`Rebuilt vector index from ${n} stored episode(s)`);
     }
 
     // NOTE: SkillLibrary is deliberately left on the SQL path. Unlike
@@ -323,7 +329,7 @@ class AgentDBCLI {
 
     try {
       const backend = await createBackend(requested, { dimensions, metric: 'cosine' });
-      log.info(`Vector backend: ${backend.name}`);
+      log.diag(`Vector backend: ${backend.name}`);
       return backend;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

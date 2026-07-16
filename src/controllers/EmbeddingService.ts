@@ -130,7 +130,7 @@ export class EmbeddingService {
             }
           }
         }
-        console.log(`Transformers.js loaded: ${this.config.model}`);
+        console.error(`Transformers.js loaded: ${this.config.model}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.pipeline = null;
