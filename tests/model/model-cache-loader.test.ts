@@ -71,10 +71,14 @@ describe('ModelCacheLoader', () => {
 
     await createTestRvf(rvfPath, dummyFiles);
 
-    // Extract from .rvf
-    const basePath = await ModelCacheLoader.extractFromRvf(rvfPath, 'test-model');
+    // Extract from .rvf. The id is the full HuggingFace id, org included —
+    // the same string model_meta records above, and the same one callers pass.
+    // It used to take a bare id and prepend 'Xenova' itself, which meant only
+    // that org could ever resolve and callers passing a full id never matched.
+    const basePath = await ModelCacheLoader.extractFromRvf(rvfPath, 'Xenova/test-model');
 
-    // Verify all files were extracted
+    // Files land at <basePath>/<modelId>, which is where transformers looks
+    // when basePath is handed to it as env.localModelPath.
     const modelDir = path.join(basePath, 'Xenova', 'test-model');
     for (const [filename, expectedContent] of Object.entries(dummyFiles)) {
       const filePath = path.join(modelDir, filename);
@@ -101,7 +105,7 @@ describe('ModelCacheLoader', () => {
     await createTestRvf(rvfPath, dummyFiles);
 
     // Extract once
-    const basePath1 = await ModelCacheLoader.extractFromRvf(rvfPath, 'test-model');
+    const basePath1 = await ModelCacheLoader.extractFromRvf(rvfPath, 'Xenova/test-model');
     const filePath = path.join(basePath1, 'Xenova', 'test-model', 'config.json');
     const mtime1 = fs.statSync(filePath).mtimeMs;
 
@@ -109,7 +113,7 @@ describe('ModelCacheLoader', () => {
     await new Promise(r => setTimeout(r, 50));
 
     // Extract again — should skip (checksums match)
-    await ModelCacheLoader.extractFromRvf(rvfPath, 'test-model');
+    await ModelCacheLoader.extractFromRvf(rvfPath, 'Xenova/test-model');
     const mtime2 = fs.statSync(filePath).mtimeMs;
 
     expect(mtime2).toBe(mtime1);
