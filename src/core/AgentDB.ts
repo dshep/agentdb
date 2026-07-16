@@ -10,6 +10,7 @@ import { ReflexionMemory } from '../controllers/ReflexionMemory.js';
 import { SkillLibrary } from '../controllers/SkillLibrary.js';
 import { CausalMemoryGraph } from '../controllers/CausalMemoryGraph.js';
 import { EmbeddingService } from '../controllers/EmbeddingService.js';
+import { MemoryController } from '../controllers/MemoryController.js';
 import { createBackend } from '../backends/factory.js';
 import type { VectorBackend } from '../backends/VectorBackend.js';
 import type { IDatabaseConnection } from '../types/database.types.js';
@@ -73,6 +74,7 @@ function defaultModelFor(provider: 'transformers' | 'openai' | 'local'): string 
 export class AgentDB {
   private db!: IDatabaseConnection;
   private reflexion!: ReflexionMemory;
+  private memoryController!: MemoryController;
   private skills!: SkillLibrary;
   private causalGraph!: CausalMemoryGraph;
   private embedder!: EmbeddingService;
@@ -120,6 +122,18 @@ export class AgentDB {
       dimensions: vectorDimension,
       metric: 'cosine',
       storagePath: dbPath === ':memory:' ? undefined : `${dbPath}.vectors`
+    });
+
+    // Attention-enhanced memory. AgentDBConfig has advertised enableAttention
+    // and attentionConfig since v2 and nothing ever read them, so the whole
+    // attention subsystem — MemoryController, self/cross/multi-head — shipped
+    // built but unreachable: getController('self-attention') threw "Unknown
+    // controller".
+    this.memoryController = new MemoryController(this.vectorBackend, {
+      namespace: this.config.namespace,
+      enableAttention: this.config.enableAttention !== false,
+      ...(this.config.attentionConfig ?? {}),
+      numHeads: this.config.attentionConfig?.multiHeadAttention?.numHeads ?? 8,
     });
 
     // Initialize controllers WITH vector backend for optimized search
@@ -189,15 +203,50 @@ export class AgentDB {
     if (FRONTIER_SCHEMA_SQL) this.db.exec(FRONTIER_SCHEMA_SQL);
   }
 
+  /** Whether attention controllers were enabled for this instance. */
+  private get attentionEnabled(): boolean {
+    return this.config.enableAttention !== false;
+  }
+
+  /**
+   * Names accepted by getController(), for discovery.
+   *
+   * Attention controllers only appear when enableAttention is on, so the list
+   * reflects what is actually reachable rather than what exists in the build.
+   */
+  listControllers(): string[] {
+    const names = ['memory', 'reflexion', 'skills', 'causal', 'causalGraph'];
+    if (this.attentionEnabled) {
+      names.push('self-attention', 'cross-attention', 'multi-head-attention');
+    }
+    return names;
+  }
+
   getController(name: string): any {
     if (!this.initialized) {
       throw new Error('AgentDB not initialized. Call initialize() first.');
     }
 
     switch (name) {
+      // 'memory' is the attention-capable MemoryController (store/retrieve/
+      // search/retrieveWithAttention). 'reflexion' remains the episodic store.
       case 'memory':
+        return this.memoryController;
       case 'reflexion':
         return this.reflexion;
+      case 'self-attention':
+      case 'cross-attention':
+      case 'multi-head-attention':
+        // Honour enableAttention: with it off these are not offered at all,
+        // rather than handed out as controllers that quietly do nothing.
+        if (!this.attentionEnabled) {
+          throw new Error(
+            `Unknown controller: ${name} (attention is disabled — construct AgentDB with enableAttention: true)`
+          );
+        }
+        if (name === 'self-attention') return this.memoryController.selfAttentionController;
+        if (name === 'cross-attention') return this.memoryController.crossAttentionController;
+        return this.memoryController.multiHeadAttentionController;
       case 'skills':
         return this.skills;
       case 'causal':

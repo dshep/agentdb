@@ -127,6 +127,25 @@ export class MemoryController {
   /**
    * Store a memory entry
    */
+  /**
+   * The attention controllers backing retrieveWithAttention().
+   *
+   * Exposed so AgentDB.getController() can hand them out rather than building
+   * a second, unrelated set — these are the ones actually wired to the vector
+   * backend and used for retrieval.
+   */
+  get selfAttentionController(): SelfAttentionController {
+    return this.selfAttention;
+  }
+
+  get crossAttentionController(): CrossAttentionController {
+    return this.crossAttention;
+  }
+
+  get multiHeadAttentionController(): MultiHeadAttentionController {
+    return this.multiHeadAttention;
+  }
+
   async store(memory: Memory, namespace?: string): Promise<void> {
     if (!memory.id || !memory.embedding || memory.embedding.length === 0) {
       throw new Error('Memory must have id and non-empty embedding');
