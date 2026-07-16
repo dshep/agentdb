@@ -457,16 +457,20 @@ describe('Persistence and Data Migration', () => {
 
       db.close();
 
-      // Corrupt the database file
+      // Corrupt the file header. Scribbling mid-file is not reliably detected
+      // at all — SQLite may never read that page — so it proved nothing.
       const dbBuffer = fs.readFileSync(TEST_DB_PATH);
       const corrupted = Buffer.from(dbBuffer);
-      // Overwrite some bytes in the middle
-      corrupted.write('CORRUPTED', 1000);
+      corrupted.write('NOTSQLITE', 0);
       fs.writeFileSync(TEST_DB_PATH, corrupted);
 
-      // Attempt to reopen - should fail gracefully
+      // SQLite opens lazily: it validates pages on read, not in the
+      // constructor, so a corrupt file surfaces on first use rather than at
+      // open. What matters is that it surfaces at all, rather than quietly
+      // returning wrong data.
+      db = new Database(TEST_DB_PATH);
       expect(() => {
-        db = new Database(TEST_DB_PATH);
+        db.prepare('SELECT * FROM reasoning_patterns').all();
       }).toThrow();
     });
 

@@ -387,3 +387,37 @@ END;
 --   - Trade-off: 2x slower writes, +15-20% storage (acceptable for read-heavy workloads)
 --   - See: db/migrations/README.md for details
 -- ============================================================================
+
+-- ============================================================================
+-- ReasoningBank: reusable task-approach patterns
+--
+-- These lived only in ReasoningBank.initializeSchema(), created imperatively
+-- when a ReasoningBank happened to be constructed. Every other controller's
+-- tables are declared here, so `agentdb init` produced a database whose schema
+-- was complete except for these two — and anything reading reasoning_patterns
+-- before a ReasoningBank existed hit "no such table". The controller still
+-- creates them IF NOT EXISTS, so databases built without this schema keep
+-- working.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS reasoning_patterns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER DEFAULT (strftime('%s', 'now')),
+  task_type TEXT NOT NULL,
+  approach TEXT NOT NULL,
+  success_rate REAL NOT NULL DEFAULT 0.0,
+  uses INTEGER DEFAULT 0,
+  avg_reward REAL DEFAULT 0.0,
+  tags TEXT,
+  metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_patterns_task_type ON reasoning_patterns(task_type);
+CREATE INDEX IF NOT EXISTS idx_patterns_success_rate ON reasoning_patterns(success_rate);
+CREATE INDEX IF NOT EXISTS idx_patterns_uses ON reasoning_patterns(uses);
+
+CREATE TABLE IF NOT EXISTS pattern_embeddings (
+  pattern_id INTEGER PRIMARY KEY,
+  embedding BLOB NOT NULL,
+  FOREIGN KEY (pattern_id) REFERENCES reasoning_patterns(id) ON DELETE CASCADE
+);
