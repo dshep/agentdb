@@ -334,8 +334,16 @@ describe('AttentionService Edge Cases', () => {
   });
 
   describe('Resource Exhaustion', () => {
+    // Attention is O(seq^2 * embedDim), and this runs in JS/WASM at roughly
+    // 6M ops/sec: seq=256 takes ~8s, and every doubling costs ~4x. The original
+    // seq=2048 is ~3.2 billion ops — about 9 minutes — and because it is
+    // CPU-bound, vitest's 30s testTimeout cannot interrupt it. One test made
+    // the whole file look hung.
+    //
+    // 512 is ~32s: still an order of magnitude past any other case here, and
+    // enough to exercise the large-allocation path this test is about.
     it('should handle very large sequences', async () => {
-      const seqLen = 2048; // Large sequence
+      const seqLen = 512; // Large sequence
       const embedDim = 768;
 
       const query = new Float32Array(seqLen * embedDim);
@@ -356,7 +364,7 @@ describe('AttentionService Edge Cases', () => {
         expect(err).toBeInstanceOf(Error);
         expect((err as Error).message).toMatch(/memory|size|limit/i);
       }
-    });
+    }, 90_000);
 
     it('should handle rapid sequential allocations', async () => {
       const iterations = 100;

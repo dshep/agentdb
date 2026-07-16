@@ -58,7 +58,11 @@ export class AttentionService {
   private sparsificationService?: SparsificationService;
   private mincutService?: MincutService;
 
+  /** Distinguishes concurrent initializations in the global performance namespace. */
+  private static initSeq = 0;
   private initialized: boolean = false;
+  /** Set by dispose(); a disposed service must not quietly come back to life. */
+  private disposed: boolean = false;
   private initPromise: Promise<void> | null = null;
   private warmedUp: boolean = false;
 
@@ -91,6 +95,22 @@ export class AttentionService {
    * Thread-safe with promise guard to prevent concurrent initialization
    */
   async initialize(): Promise<void> {
+    this.ensureNotDisposed();
+
+    // The heads must tile the embedding exactly. A config where
+    // numHeads * headDim !== embedDim was accepted and then produced output
+    // shaped by whichever of the three the backend happened to trust —
+    // wrong, but numeric, and therefore invisible.
+    const embedDim = this.configManager.getEmbedDim();
+    const numHeads = this.configManager.getNumHeads();
+    const headDim = this.configManager.getHeadDim();
+    if (numHeads * headDim !== embedDim) {
+      throw new Error(
+        `Invalid attention config: numHeads (${numHeads}) * headDim (${headDim}) = ` +
+        `${numHeads * headDim}, which must equal embedDim (${embedDim}).`
+      );
+    }
+
     // Already initialized
     if (this.initialized) {
       return;
@@ -110,20 +130,32 @@ export class AttentionService {
    * Internal initialization implementation
    */
   private async _doInitialize(): Promise<void> {
-    performance.mark('attention-service-init-start');
+    // performance marks live in a process-global namespace, so a fixed name
+    // collides across concurrent instances: one service's cleanup wiped
+    // another's start mark, and its measure() then threw "the
+    // attention-service-init-start performance mark has not been set". Give
+    // each initialization its own names and clear only those.
+    const runId = `attention-service-init-${++AttentionService.initSeq}`;
+    const startMark = `${runId}-start`;
+    const endMark = `${runId}-end`;
+
+    performance.mark(startMark);
 
     try {
       await this.wasmManager.initialize();
 
       this.initialized = true;
-      performance.mark('attention-service-init-end');
-      performance.measure('attention-service-init', 'attention-service-init-start', 'attention-service-init-end');
+      performance.mark(endMark);
+      performance.measure(runId, startMark, endMark);
 
-      const measure = performance.getEntriesByName('attention-service-init')[0];
-      console.log(`✅ AttentionService initialized in ${measure.duration.toFixed(2)}ms (${this.wasmManager.getRuntime()})`);
+      const measure = performance.getEntriesByName(runId)[0];
+      const took = measure ? `${measure.duration.toFixed(2)}ms` : 'unknown time';
+      console.log(`✅ AttentionService initialized in ${took} (${this.wasmManager.getRuntime()})`);
 
       // Clear performance entries to prevent memory leak
-      this.metricsTracker.clearPerformanceEntries('attention-service-init');
+      this.metricsTracker.clearPerformanceEntries(runId);
+      performance.clearMarks(startMark);
+      performance.clearMarks(endMark);
 
       // Warm up JIT with small computation
       if (!this.warmedUp) {
@@ -151,15 +183,82 @@ export class AttentionService {
    * @param mask - Optional attention mask [batchSize * seqLen * seqLen]
    * @returns Attention output and metadata
    */
+  /**
+   * dispose() releases the WASM modules and sets initialized = false, which
+   * meant the next call simply re-initialized and carried on — a disposed
+   * service silently resurrected itself instead of failing.
+   */
+  private ensureNotDisposed(): void {
+    if (this.disposed) {
+      throw new Error(
+        'AttentionService has been disposed and cannot be used. Construct a new one.'
+      );
+    }
+  }
+
+  /**
+   * Reject inputs that cannot produce a meaningful result.
+   *
+   * There was no validation at all: an empty array, a length that isn't a
+   * whole number of embeddings, or a single NaN all flowed through and came
+   * back as a Float32Array of numbers. NaN propagates through the softmax, so
+   * the caller got a plausible-looking tensor that was silently meaningless —
+   * the same failure as a mock embedding, one layer down.
+   *
+   * The scan is O(n) against an O(n^2) computation, so it costs nothing
+   * relative to the work it guards.
+   */
+  private validateAttentionInputs(
+    query: Float32Array,
+    key: Float32Array,
+    value: Float32Array
+  ): void {
+    const embedDim = this.configManager.getEmbedDim();
+
+    for (const [name, arr] of [['query', query], ['key', key], ['value', value]] as const) {
+      if (arr.length === 0) {
+        throw new Error(
+          `Attention ${name} is empty: at least one token of ${embedDim} dimensions is required.`
+        );
+      }
+      if (arr.length % embedDim !== 0) {
+        throw new Error(
+          `Attention ${name} has length ${arr.length}, which is not a multiple of embedDim ${embedDim} — dimension mismatch.`
+        );
+      }
+    }
+
+    if (key.length !== value.length) {
+      throw new Error(
+        `Attention key/value dimension mismatch: key holds ${key.length / embedDim} tokens, ` +
+        `value holds ${value.length / embedDim}. They must describe the same sequence.`
+      );
+    }
+
+    for (const [name, arr] of [['query', query], ['key', key], ['value', value]] as const) {
+      for (let i = 0; i < arr.length; i++) {
+        if (!Number.isFinite(arr[i])) {
+          throw new Error(
+            `Attention ${name} contains a non-finite value (${arr[i]}) at index ${i}. ` +
+            `NaN and Infinity propagate through softmax, so the output would be meaningless.`
+          );
+        }
+      }
+    }
+  }
+
   async multiHeadAttention(
     query: Float32Array,
     key: Float32Array,
     value: Float32Array,
     mask?: Float32Array
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
+
+    this.validateAttentionInputs(query, key, value);
 
     performance.mark('mha-start');
 
@@ -237,6 +336,7 @@ export class AttentionService {
     value: Float32Array,
     mask?: Float32Array
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -315,6 +415,7 @@ export class AttentionService {
       dropout?: number;
     }
   ): Promise<AttentionResult & { speedup?: number; baselineTimeMs?: number }> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -436,6 +537,7 @@ export class AttentionService {
     key: Float32Array,
     value: Float32Array
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -506,6 +608,7 @@ export class AttentionService {
     value: Float32Array,
     curvature: number = -1.0
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -592,6 +695,7 @@ export class AttentionService {
       compareBaseline?: boolean;
     }
   ): Promise<{ output: Float32Array; speedup?: number; baselineTimeMs?: number; fusedTimeMs?: number }> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -608,6 +712,7 @@ export class AttentionService {
     value: Float32Array,
     mask?: Float32Array
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -732,6 +837,7 @@ export class AttentionService {
     // Reset state
     this.initialized = false;
     this.warmedUp = false;
+    this.disposed = true;
     this.initPromise = null;
 
     // Reset stats
@@ -761,6 +867,7 @@ export class AttentionService {
       topK?: number;
     }
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
@@ -900,6 +1007,7 @@ export class AttentionService {
       maxPartitionSize?: number;
     }
   ): Promise<AttentionResult> {
+    this.ensureNotDisposed();
     if (!this.initialized) {
       await this.initialize();
     }
