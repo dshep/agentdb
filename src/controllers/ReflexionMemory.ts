@@ -58,7 +58,29 @@ export interface ReflexionQuery {
   onlyFailures?: boolean;
   onlySuccesses?: boolean;
   timeWindowDays?: number;
+  /**
+   * Minimum cosine similarity to `task` for an episode to count as relevant.
+   *
+   * Without this, retrieval is pure top-k: `task` only shapes the ranking and
+   * never excludes anything, so a query about one task happily returns another
+   * task's episodes whenever the store has nothing closer. Set it to make
+   * "relevant to this task" mean something.
+   *
+   * With the default local model, related text scores ~0.35-0.45 and unrelated
+   * text ~0.05-0.10, so ~0.25 separates them with room to spare. Undefined
+   * keeps the old top-k behaviour.
+   */
+  minSimilarity?: number;
 }
+
+/**
+ * Relevance floor used by the summary helpers.
+ *
+ * They promise "for this task" in both their results and their empty-state
+ * messages, so they cannot use unfiltered top-k — that is what made
+ * 'No prior failures found for this task.' unreachable.
+ */
+const SUMMARY_MIN_SIMILARITY = 0.25;
 
 export class ReflexionMemory {
   private db: IDatabaseConnection;
@@ -254,12 +276,14 @@ export class ReflexionMemory {
       onlyFailures = false,
       onlySuccesses = false,
       timeWindowDays,
+      minSimilarity,
     } = query;
 
-    // Check cache first
+    // Check cache first. minSimilarity must be part of the key — the same
+    // query at two thresholds is two different result sets.
     const cacheKey = this.queryCache.generateKey(
       'retrieveRelevant',
-      [task, currentState, k, minReward, onlyFailures, onlySuccesses, timeWindowDays],
+      [task, currentState, k, minReward, onlyFailures, onlySuccesses, timeWindowDays, minSimilarity],
       'episodes'
     );
 
@@ -282,6 +306,17 @@ export class ReflexionMemory {
       episodes = await this.retrieveFromVectorBackend(queryEmbedding, query);
     } else {
       episodes = await this.retrieveFromSQLFallback(queryEmbedding, query);
+    }
+
+    // Drop episodes that aren't actually relevant to `task`. Applied here so
+    // it holds for every retrieval strategy rather than being reimplemented
+    // (or forgotten) in each. Episodes with no similarity score — the graph
+    // adapter doesn't compute one — are left alone rather than silently
+    // dropped, since we have nothing to judge them by.
+    if (minSimilarity !== undefined) {
+      episodes = episodes.filter(
+        (ep) => ep.similarity === undefined || ep.similarity >= minSimilarity
+      );
     }
 
     // Cache and return results
@@ -727,7 +762,7 @@ export class ReflexionMemory {
     // Check cache first
     const cacheKey = this.queryCache.generateKey(
       'getCritiqueSummary',
-      [query.task, query.k],
+      [query.task, query.k, query.minSimilarity],
       'episodes'
     );
 
@@ -739,6 +774,10 @@ export class ReflexionMemory {
       ...query,
       onlyFailures: true,
       k: 3,
+      // Only failures actually related to this task. Unfiltered top-k would
+      // return whatever failures exist, so the "no prior failures" branch
+      // below could never be reached.
+      minSimilarity: query.minSimilarity ?? SUMMARY_MIN_SIMILARITY,
     });
 
     if (failures.length === 0) {
@@ -764,7 +803,7 @@ export class ReflexionMemory {
     // Check cache first
     const cacheKey = this.queryCache.generateKey(
       'getSuccessStrategies',
-      [query.task, query.k],
+      [query.task, query.k, query.minReward, query.minSimilarity],
       'episodes'
     );
 
@@ -775,8 +814,9 @@ export class ReflexionMemory {
     const successes = await this.retrieveRelevant({
       ...query,
       onlySuccesses: true,
-      minReward: 0.7,
+      minReward: query.minReward ?? 0.7,
       k: 3,
+      minSimilarity: query.minSimilarity ?? SUMMARY_MIN_SIMILARITY,
     });
 
     if (successes.length === 0) {

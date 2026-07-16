@@ -39,10 +39,14 @@ describe('ReflexionMemory', () => {
       db.exec(fs.readFileSync(frontierSchemaPath, 'utf-8'));
     }
 
+    // A real model, not the 'local' hash stub. The stub produces unrelated
+    // vectors for related text (it scored "authentication issues" against
+    // "add authentication middleware" at -0.978), so every similarity,
+    // ordering and relevance assertion here was measuring hash collisions.
     embedder = new EmbeddingService({
-      model: 'mock-model',
+      model: 'Xenova/all-MiniLM-L6-v2',
       dimension: 384,
-      provider: 'local',
+      provider: 'transformers',
     });
     await embedder.initialize();
 
