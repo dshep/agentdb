@@ -50,13 +50,13 @@ interface TestContext {
 }
 
 // Helper function to add simplified causal edge
-function addSimpleCausalEdge(ctx: TestContext, params: {
+async function addSimpleCausalEdge(ctx: TestContext, params: {
   cause: string;
   effect: string;
   uplift: number;
   confidence: number;
   sampleSize: number;
-}): number {
+}): Promise<number> {
   const edge: CausalEdge = {
     fromMemoryId: 1, // Use actual ID instead of 0
     fromMemoryType: params.cause as any,
@@ -69,10 +69,10 @@ function addSimpleCausalEdge(ctx: TestContext, params: {
     evidenceIds: []
   };
 
-  const edgeId = ctx.causalGraph.addCausalEdge(edge);
-
-  // Return actual number, not object
-  return typeof edgeId === 'number' ? edgeId : parseInt(String(edgeId));
+  // addCausalEdge is async. This used to take the un-awaited Promise and
+  // coerce it — parseInt(String(promise)) is parseInt('[object Promise]'),
+  // i.e. NaN — rather than wait for the id.
+  return await ctx.causalGraph.addCausalEdge(edge);
 }
 
 async function setupTestContext(): Promise<TestContext> {
@@ -369,8 +369,8 @@ describe('AgentDB MCP Tools - Causal Memory', () => {
   });
 
   describe('causal_add_edge', () => {
-    it('should add causal edge with all fields', () => {
-      const edgeId = addSimpleCausalEdge(ctx, {
+    it('should add causal edge with all fields', async () => {
+      const edgeId = await addSimpleCausalEdge(ctx, {
         cause: 'add_tests',
         effect: 'code_quality',
         uplift: 0.25,
@@ -382,8 +382,8 @@ describe('AgentDB MCP Tools - Causal Memory', () => {
       expect(typeof edgeId).toBe('number');
     });
 
-    it('should add edge with minimal fields', () => {
-      const edgeId = addSimpleCausalEdge(ctx, {
+    it('should add edge with minimal fields', async () => {
+      const edgeId = await addSimpleCausalEdge(ctx, {
         cause: 'add_logging',
         effect: 'debugging_speed',
         uplift: 0.15,
@@ -394,8 +394,8 @@ describe('AgentDB MCP Tools - Causal Memory', () => {
       expect(edgeId).toBeGreaterThan(0);
     });
 
-    it('should handle negative uplift (harmful effect)', () => {
-      const edgeId = addSimpleCausalEdge(ctx, {
+    it('should handle negative uplift (harmful effect)', async () => {
+      const edgeId = await addSimpleCausalEdge(ctx, {
         cause: 'skip_code_review',
         effect: 'bug_rate',
         uplift: -0.3,
@@ -408,7 +408,7 @@ describe('AgentDB MCP Tools - Causal Memory', () => {
   });
 
   describe('causal_query', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       // Seed causal edges
       const edges = [
         { cause: 'add_tests', effect: 'code_quality', uplift: 0.25, confidence: 0.95, sampleSize: 100 },
@@ -416,14 +416,18 @@ describe('AgentDB MCP Tools - Causal Memory', () => {
         { cause: 'add_caching', effect: 'response_time', uplift: 0.4, confidence: 0.85, sampleSize: 60 }
       ];
 
-      edges.forEach(edge => {
-        addSimpleCausalEdge(ctx, edge);
-      });
+      // for...of, not forEach: an async callback inside forEach is not awaited,
+      // so the assertions below could run before the edges existed.
+      for (const edge of edges) {
+        await addSimpleCausalEdge(ctx, edge);
+      }
     });
 
     it('should query causal edges', () => {
       const edges = ctx.causalGraph.queryCausalEffects({
-        interventionMemoryId: 0,
+        // addSimpleCausalEdge seeds edges with fromMemoryId 1, so querying 0
+        // matched nothing and the assertions below never had anything to check.
+        interventionMemoryId: 1,
         interventionMemoryType: 'add_tests',
         minConfidence: 0.0,
         minUplift: 0.0
@@ -476,7 +480,7 @@ describe('AgentDB MCP Tools - Explainable Recall', () => {
       }
 
       // Add causal edge
-      addSimpleCausalEdge(ctx, {
+      await addSimpleCausalEdge(ctx, {
         cause: 'database_optimization',
         effect: 'response_time',
         uplift: 0.4,
@@ -654,7 +658,7 @@ describe('AgentDB MCP Tools - Integration Tests', () => {
     }
 
     // Add causal edge
-    addSimpleCausalEdge(ctx, {
+    await addSimpleCausalEdge(ctx, {
       cause: 'add_tests',
       effect: 'code_quality',
       uplift: 0.2,
