@@ -70,10 +70,15 @@ describe('BatchOperations Security Tests', () => {
     `);
 
     // Initialize embedder (mock mode)
+    // 'local' is the deterministic stub. This asked for provider
+    // 'transformers' with a model literally named 'mock', so it tried to fetch
+    // "mock" from HuggingFace, failed, and silently fell back to stubs anyway.
+    // These are input-validation tests — they don't need real embeddings, they
+    // need fast deterministic ones, so ask for that directly.
     embedder = new EmbeddingService({
-      model: 'mock',
+      model: 'mock-model',
       dimension: 384,
-      provider: 'transformers'
+      provider: 'local'
     });
     await embedder.initialize();
 

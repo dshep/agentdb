@@ -23,42 +23,18 @@ describe('SparsificationService', () => {
 
   // Test graph: Simple linear chain
   // 0 -> 1 -> 2 -> 3 -> 4
-  const linearChain: GraphEdges = {
-    0: [1],
-    1: [2],
-    2: [3],
-    3: [4],
-    4: [],
-  };
+  const linearChain: GraphEdges = [[1], [2], [3], [4], []];
 
   // Test graph: Star topology
   // 0 is hub connected to 1, 2, 3, 4
-  const starGraph: GraphEdges = {
-    0: [1, 2, 3, 4],
-    1: [0],
-    2: [0],
-    3: [0],
-    4: [0],
-  };
+  const starGraph: GraphEdges = [[1, 2, 3, 4], [0], [0], [0], [0]];
 
   // Test graph: Cycle
   // 0 -> 1 -> 2 -> 3 -> 0
-  const cycleGraph: GraphEdges = {
-    0: [1],
-    1: [2],
-    2: [3],
-    3: [0],
-  };
+  const cycleGraph: GraphEdges = [[1], [2], [3], [0]];
 
   // Test graph: Dense graph with clear clustering
-  const denseGraph: GraphEdges = {
-    0: [1, 2, 3],
-    1: [0, 2],
-    2: [0, 1, 3],
-    3: [0, 2, 4, 5],
-    4: [3, 5],
-    5: [3, 4],
-  };
+  const denseGraph: GraphEdges = [[1, 2, 3], [0, 2], [0, 1, 3], [0, 2, 4, 5], [3, 5], [3, 4]];
 
   beforeEach(async () => {
     const config: SparsificationConfig = {
@@ -143,12 +119,7 @@ describe('SparsificationService', () => {
     });
 
     it('should handle disconnected nodes gracefully', async () => {
-      const disconnectedGraph: GraphEdges = {
-        0: [1],
-        1: [],
-        2: [3], // Disconnected component
-        3: [],
-      };
+      const disconnectedGraph: GraphEdges = [[1], [], [3], []];
 
       const result = await service.pprSparsification(0, disconnectedGraph, 2, 0.15);
       expect(result).toBeDefined();
@@ -224,10 +195,7 @@ describe('SparsificationService', () => {
     });
 
     it('should terminate on isolated nodes', async () => {
-      const isolatedGraph: GraphEdges = {
-        0: [1],
-        1: [], // Dead end
-      };
+      const isolatedGraph: GraphEdges = [[1], []];
 
       const result = await service.randomWalkSparsification(0, isolatedGraph, 2, 50, 10);
       expect(result).toBeDefined();
@@ -263,11 +231,7 @@ describe('SparsificationService', () => {
     });
 
     it('should handle uniform degree graphs', async () => {
-      const uniformGraph: GraphEdges = {
-        0: [1],
-        1: [2],
-        2: [0],
-      };
+      const uniformGraph: GraphEdges = [[1], [2], [0]];
 
       service.updateConfig({ method: 'degree-based', topK: 2 });
       const result = await service.sparsify(0, uniformGraph);
@@ -341,10 +305,7 @@ describe('SparsificationService', () => {
     });
 
     it('should handle k larger than graph size', async () => {
-      const smallGraph: GraphEdges = {
-        0: [1],
-        1: [],
-      };
+      const smallGraph: GraphEdges = [[1], []];
 
       const result = await service.pprSparsification(0, smallGraph, 10, 0.15);
       expect(result.topKIndices.length).toBeLessThanOrEqual(10);
@@ -367,37 +328,34 @@ describe('SparsificationService', () => {
 
   describe('Edge Cases', () => {
     it('should handle empty graph', async () => {
-      const emptyGraph: GraphEdges = {};
+      const emptyGraph: GraphEdges = [];
 
       const result = await service.pprSparsification(0, emptyGraph, 1, 0.15);
       expect(result).toBeDefined();
     });
 
     it('should handle single-node graph', async () => {
-      const singleNode: GraphEdges = {
-        0: [],
-      };
+      const singleNode: GraphEdges = [[]];
 
       const result = await service.pprSparsification(0, singleNode, 1, 0.15);
       expect(result.topKIndices).toContain(0);
     });
 
     it('should handle self-loops', async () => {
-      const selfLoopGraph: GraphEdges = {
-        0: [0, 1],
-        1: [1],
-      };
+      const selfLoopGraph: GraphEdges = [[0, 1], [1]];
 
       const result = await service.pprSparsification(0, selfLoopGraph, 2, 0.15);
       expect(result).toBeDefined();
     });
 
     it('should handle large node IDs', async () => {
-      const sparseGraph: GraphEdges = {
-        100: [200],
-        200: [300],
-        300: [],
-      };
+      // GraphEdges is an indexed array, so sparse node ids are holes in it
+      // rather than object keys. This still exercises the point of the test —
+      // ids far above the neighbour count — without pretending the type is a map.
+      const sparseGraph: GraphEdges = [];
+      sparseGraph[100] = [200];
+      sparseGraph[200] = [300];
+      sparseGraph[300] = [];
 
       const result = await service.pprSparsification(100, sparseGraph, 2, 0.15);
       expect(result).toBeDefined();
