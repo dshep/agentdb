@@ -181,6 +181,21 @@ class AgentDBCLI {
     }
   }
 
+  /**
+   * Flush the database to disk when the backend requires it.
+   *
+   * Only the sql.js (WASM) wrapper defines `save()` — it holds the whole
+   * database in memory until explicitly exported. Native better-sqlite3
+   * commits on write and has no such method, so calling it unguarded threw
+   * `this.db.save is not a function` once native became the preferred
+   * backend.
+   */
+  private persist(): void {
+    if (this.db && typeof this.db.save === 'function') {
+      this.db.save();
+    }
+  }
+
   async initialize(dbPath: string = './agentdb.db'): Promise<void> {
     // Initialize database
     this.db = await createDatabase(dbPath);
@@ -308,8 +323,7 @@ class AgentDBCLI {
     log.success(`Created experiment #${expId}`);
     log.info('Use `agentdb causal experiment add-observation` to record data');
 
-    // Save database to persist experiment
-    this.db.save();
+    this.persist();
   }
 
   async causalExperimentAddObservation(params: {
@@ -341,8 +355,7 @@ class AgentDBCLI {
         : undefined
     });
 
-    // Save database to persist changes
-    this.db.save();
+    this.persist();
 
     log.success(`Recorded ${params.isTreatment ? 'treatment' : 'control'} observation: ${params.outcome}`);
   }
@@ -554,8 +567,7 @@ class AgentDBCLI {
 
     const episodeId = await this.reflexion.storeEpisode(params as Episode);
 
-    // Save database to persist changes
-    this.db.save();
+    this.persist();
 
     log.success(`Stored episode #${episodeId}`);
     if (params.critique) {
@@ -741,8 +753,7 @@ class AgentDBCLI {
       createdFromEpisode: params.episodeId
     });
 
-    // Save database to persist changes
-    this.db.save();
+    this.persist();
 
     log.success(`Created skill #${skillId}`);
   }
@@ -806,8 +817,7 @@ class AgentDBCLI {
       extractPatterns: params.extractPatterns !== false
     });
 
-    // Save database to persist changes
-    this.db.save();
+    this.persist();
 
     const duration = Date.now() - startTime;
 
