@@ -70,27 +70,51 @@ export class EmbeddingService {
 
         const env = transformers.env as Record<string, unknown>;
 
-        // Try to load model from bundled .rvf or local cache first
+        // transformers.env is a process-wide singleton, so pinning it to one
+        // model's local copy leaks to every EmbeddingService created later:
+        // the next one, for a different model, would find remote downloads
+        // disabled and a localModelPath pointing at the wrong tree. Snapshot
+        // the keys we touch and restore them once the pipeline is built.
+        const envSnapshot: Record<string, unknown> = {
+          localModelPath: env.localModelPath,
+          allowRemoteModels: env.allowRemoteModels,
+          cacheDir: env.cacheDir,
+        };
+
         try {
-          const { ModelCacheLoader } = await import('../model/ModelCacheLoader.js');
-          const cached = await ModelCacheLoader.resolve(this.config.model);
+          // Try to load model from bundled .rvf or local cache first
+          try {
+            const { ModelCacheLoader } = await import('../model/ModelCacheLoader.js');
+            const cached = await ModelCacheLoader.resolve(this.config.model);
 
-          if (cached) {
-            env.localModelPath = cached.localPath;
-            env.allowRemoteModels = false;
-            env.cacheDir = cached.localPath;
+            if (cached) {
+              // A local copy exists — use it and don't touch the network.
+              env.localModelPath = cached.localPath;
+              env.allowRemoteModels = false;
+              env.cacheDir = cached.localPath;
+            }
+          } catch {
+            // ModelCacheLoader not available — fall through to network download
           }
-        } catch {
-          // ModelCacheLoader not available — fall through to network download
-        }
 
-        // Set Hugging Face token if available from environment
-        const hfToken = process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN;
-        if (hfToken && typeof env === 'object') {
-          env.HF_TOKEN = hfToken;
-        }
+          // Set Hugging Face token if available from environment
+          const hfToken = process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN;
+          if (hfToken && typeof env === 'object') {
+            env.HF_TOKEN = hfToken;
+          }
 
-        this.pipeline = await transformers.pipeline('feature-extraction', this.config.model);
+          this.pipeline = await transformers.pipeline('feature-extraction', this.config.model);
+        } finally {
+          // pipeline() has read what it needs; hand the global env back as we
+          // found it, whether we succeeded or threw.
+          for (const [key, value] of Object.entries(envSnapshot)) {
+            if (value === undefined) {
+              delete env[key];
+            } else {
+              env[key] = value;
+            }
+          }
+        }
         console.log(`Transformers.js loaded: ${this.config.model}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);

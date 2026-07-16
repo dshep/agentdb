@@ -40,13 +40,35 @@ function validateModelId(modelId: string): void {
 }
 
 export class ModelCacheLoader {
+  /**
+   * Locate a local copy of `modelId`, or null to let the caller download it.
+   *
+   * `modelId` is the full HuggingFace id, org included
+   * ('Xenova/all-MiniLM-L6-v2'). The returned `localPath` is a ROOT: callers
+   * hand it to transformers as `env.localModelPath`, and transformers then
+   * looks under `<root>/<modelId>`. So every layout here must be
+   * `<root>/<org>/<name>` — which is exactly what `<root>/<modelId>` gives.
+   *
+   * This used to hardcode an extra 'Xenova' path segment and expect a bare
+   * id. Callers pass the full id, so lookups became `<root>/Xenova/Xenova/…`
+   * and always missed: resolve() returned null every time, which silently
+   * disabled AGENTDB_MODEL_PATH and the bundled .rvf entirely. (Plain caching
+   * still worked — transformers keeps its own .cache and consults it whether
+   * or not localModelPath is set — so the breakage stayed invisible.) On the
+   * one path where a bare id did match, `localPath` pointed one directory
+   * above where transformers looks; with remote models already disabled, that
+   * was an unrecoverable "file was not found locally".
+   *
+   * Using the id as given also drops the assumption that every model is a
+   * Xenova one; any ONNX model resolves (e.g. Supabase/gte-small).
+   */
   static async resolve(modelId: string): Promise<ModelCacheResult | null> {
     validateModelId(modelId);
 
     // 1. Check AGENTDB_MODEL_PATH env var
     const envPath = process.env.AGENTDB_MODEL_PATH;
     if (envPath) {
-      const modelDir = path.join(envPath, 'Xenova', modelId);
+      const modelDir = path.join(envPath, modelId);
       if (fs.existsSync(modelDir)) {
         return { localPath: envPath, fromBundle: false };
       }
@@ -65,14 +87,14 @@ export class ModelCacheLoader {
       path.join(os.homedir(), '.cache', 'huggingface', 'hub'),
     ];
     for (const cacheDir of cacheDirs) {
-      const onnxPath = path.join(cacheDir, 'Xenova', modelId, 'onnx', 'model_quantized.onnx');
+      const onnxPath = path.join(cacheDir, modelId, 'onnx', 'model_quantized.onnx');
       if (fs.existsSync(onnxPath)) {
         return { localPath: cacheDir, fromBundle: false };
       }
     }
 
     // 4. Check previously extracted temp dir
-    const tempOnnx = path.join(TEMP_MODEL_DIR, 'Xenova', modelId, 'onnx', 'model_quantized.onnx');
+    const tempOnnx = path.join(TEMP_MODEL_DIR, modelId, 'onnx', 'model_quantized.onnx');
     if (fs.existsSync(tempOnnx)) {
       return { localPath: TEMP_MODEL_DIR, fromBundle: true };
     }
@@ -86,7 +108,9 @@ export class ModelCacheLoader {
    */
   static async extractFromRvf(rvfPath: string, modelId: string): Promise<string> {
     validateModelId(modelId);
-    const targetDir = path.join(TEMP_MODEL_DIR, 'Xenova', modelId);
+    // Extract to <root>/<modelId> so it matches where transformers looks,
+    // given TEMP_MODEL_DIR is returned as env.localModelPath.
+    const targetDir = path.join(TEMP_MODEL_DIR, modelId);
 
     const SQL = await getSqlFactory();
     const fileBuffer = fs.readFileSync(rvfPath);
@@ -130,14 +154,25 @@ export class ModelCacheLoader {
 
   private static findBundledRvf(modelId: string): string | null {
     const dirname = path.dirname(new URL(import.meta.url).pathname);
-    const candidates = [
-      path.join(dirname, '../../models', `${modelId}.rvf`),
-      path.join(dirname, '../../../dist/models', `${modelId}.rvf`),
-      path.join(dirname, '../../../../dist/models', `${modelId}.rvf`),
+    const roots = [
+      path.join(dirname, '../../models'),
+      path.join(dirname, '../../../dist/models'),
+      path.join(dirname, '../../../../dist/models'),
     ];
 
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) return candidate;
+    // Accept both namings: the org-qualified path implied by the full model id
+    // ('Xenova/all-MiniLM-L6-v2.rvf'), and the flat name that
+    // scripts/build-model-rvf.mjs actually emits ('all-MiniLM-L6-v2.rvf').
+    // Checking only the first would leave every existing bundle unfound.
+    const names = [`${modelId}.rvf`];
+    const flat = modelId.split('/').pop();
+    if (flat && flat !== modelId) names.push(`${flat}.rvf`);
+
+    for (const root of roots) {
+      for (const name of names) {
+        const candidate = path.join(root, name);
+        if (fs.existsSync(candidate)) return candidate;
+      }
     }
     return null;
   }

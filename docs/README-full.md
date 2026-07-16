@@ -2122,12 +2122,20 @@ node scripts/build-model-rvf.mjs --source /path/to/model/files
 // Programmatic access
 import { ModelCacheLoader } from "agentdb/model";
 
-const cached = await ModelCacheLoader.resolve("all-MiniLM-L6-v2");
+// Pass the full HuggingFace id, org included — the same string you would give
+// the embedding config. `localPath` is a ROOT: the model lives at
+// `<localPath>/<modelId>`, which is what transformers expects as
+// `env.localModelPath`.
+const cached = await ModelCacheLoader.resolve("Xenova/all-MiniLM-L6-v2");
 if (cached) {
-  console.log(cached.localPath); // path to extracted model
+  console.log(cached.localPath); // root containing Xenova/all-MiniLM-L6-v2/
   console.log(cached.fromBundle); // true if loaded from .rvf
 }
 ```
+
+Any ONNX model resolves, not just `Xenova/*` — e.g. `Supabase/gte-small`.
+A bare id with no org (`"all-MiniLM-L6-v2"`) will not resolve locally and
+falls through to the network.
 
 Set `AGENTDB_MODEL_PATH` to point to a custom model directory:
 
