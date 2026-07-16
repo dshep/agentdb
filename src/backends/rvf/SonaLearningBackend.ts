@@ -75,6 +75,43 @@ const MAX_PATTERNS_K = 100;
 /**
  * SonaLearningBackend - Native adaptive learning via @ruvector/sona
  */
+/**
+ * Read the engine's stats blob, whichever shape it arrives in.
+ *
+ * getStats() returns Rust's Debug formatting —
+ * `CoordinatorStats { trajectories_buffered: 0, buffer_success_rate: 1.0, ... }`
+ * — not JSON. JSON.parse() on that throws, and the caller's catch turned the
+ * failure into "enabled: false" with every counter zeroed: stats that looked
+ * real and reported the engine as off while it was running.
+ *
+ * Try JSON first so a future engine that does emit JSON keeps working, then
+ * fall back to scraping `key: value` pairs out of the Debug form.
+ */
+function num(value: number | boolean | undefined): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+function parseSonaStats(raw: string): Record<string, number | boolean> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, number | boolean>;
+  } catch {
+    // Not JSON — fall through to the Debug format.
+  }
+
+  const out: Record<string, number | boolean> = {};
+  for (const [, key, value] of raw.matchAll(/(\w+):\s*([^,}]+)/g)) {
+    const v = value.trim();
+    if (v === 'true' || v === 'false') {
+      out[key] = v === 'true';
+      continue;
+    }
+    const n = Number(v);
+    if (!Number.isNaN(n)) out[key] = n;
+  }
+  return out;
+}
+
 export class SonaLearningBackend {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private engine: any = null;
@@ -291,12 +328,16 @@ export class SonaLearningBackend {
   getStats(): SonaStats {
     this.ensureAlive();
     try {
-      const raw = JSON.parse(this.engine.getStats() as string);
+      const raw = parseSonaStats(this.engine.getStats() as string);
       return {
-        totalTrajectories: raw.total_trajectories ?? 0,
+        // The engine reports trajectories_buffered / patterns_stored /
+        // ewc_tasks; the older JSON contract this was written against used
+        // total_trajectories / patterns_learned / learning_cycles. Accept
+        // either so a rename doesn't silently zero the numbers again.
+        totalTrajectories: num(raw.total_trajectories ?? raw.trajectories_buffered),
         activeTrajectories: this.activeTrajectories.size,
-        patternsLearned: raw.patterns_learned ?? 0,
-        learningCycles: raw.learning_cycles ?? 0,
+        patternsLearned: num(raw.patterns_learned ?? raw.patterns_stored),
+        learningCycles: num(raw.learning_cycles ?? raw.ewc_tasks),
         enabled: this.engine.isEnabled() as boolean,
       };
     } catch {
@@ -305,7 +346,10 @@ export class SonaLearningBackend {
         activeTrajectories: this.activeTrajectories.size,
         patternsLearned: 0,
         learningCycles: 0,
-        enabled: false,
+        // Ask the engine directly rather than reporting "disabled" because a
+        // stats string failed to parse — that conflated "cannot read stats"
+        // with "learning is off".
+        enabled: this.safeIsEnabled(),
       };
     }
   }
@@ -320,6 +364,15 @@ export class SonaLearningBackend {
       flushCount: this._flushCount,
       tickCount: this._tickCounter,
     };
+  }
+
+  /** isEnabled() without throwing, for use on the stats error path. */
+  private safeIsEnabled(): boolean {
+    try {
+      return this.engine.isEnabled() as boolean;
+    } catch {
+      return false;
+    }
   }
 
   /**
