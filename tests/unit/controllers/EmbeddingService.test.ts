@@ -134,18 +134,24 @@ describe('EmbeddingService', () => {
     it('should cache embeddings', async () => {
       const text = 'cached text';
 
-      // First call - generates embedding
-      const startTime1 = Date.now();
-      await embedder.embed(text);
-      const duration1 = Date.now() - startTime1;
+      // Assert the cache is used, not that it is faster. Timing this proved
+      // nothing: both calls complete inside a millisecond, so the old
+      // `expect(duration2).toBeLessThan(duration1)` reduced to 0 < 0 and
+      // failed on speed rather than on any cache defect.
+      const first = await embedder.embed(text);
+      const cached = await embedder.embed(text);
 
-      // Second call - should be cached (faster)
-      const startTime2 = Date.now();
-      await embedder.embed(text);
-      const duration2 = Date.now() - startTime2;
+      // A cache hit hands back the very same array — a recomputation could not.
+      expect(cached).toBe(first);
 
-      // Cached call should be significantly faster
-      expect(duration2).toBeLessThan(duration1);
+      // And prove the identity above came from the cache rather than from the
+      // provider being deterministic: after a clear, the same text recomputes
+      // into an equal-but-distinct array.
+      embedder.clearCache();
+      const recomputed = await embedder.embed(text);
+
+      expect(recomputed).not.toBe(first);
+      expect(Array.from(recomputed)).toEqual(Array.from(first));
     });
 
     it('should return same instance from cache', async () => {
