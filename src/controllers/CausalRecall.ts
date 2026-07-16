@@ -196,7 +196,9 @@ export class CausalRecall {
         e.latency_ms
       FROM episodes e
       JOIN episode_embeddings ee ON e.id = ee.episode_id
-      ORDER BY e.ts DESC
+      -- ts is whole seconds; id breaks the tie so "most recent" is stable
+      -- rather than whatever order SQLite happens to return.
+      ORDER BY e.ts DESC, e.id DESC
       LIMIT ?
     `).all(k * 2);
 

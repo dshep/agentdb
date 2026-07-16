@@ -34,6 +34,21 @@ export class EmbeddingService {
   private usingMock: boolean;
 
   constructor(config: EmbeddingConfig) {
+    // A missing or nonsensical dimension used to sail through: mockEmbedding
+    // does `new Float32Array(this.config.dimension)`, and `new
+    // Float32Array(undefined)` is a zero-length vector, not an error. Every
+    // embedding then came out empty, inserts failed inside the vector index on
+    // a dimension mismatch, and search quietly returned nothing — a long way
+    // from the actual mistake. `dimensions: 384` (plural — the field is
+    // `dimension`) was enough to cause it.
+    const { dimension } = config;
+    if (!Number.isInteger(dimension) || dimension <= 0) {
+      throw new Error(
+        `EmbeddingService requires a positive integer 'dimension', received ${JSON.stringify(dimension)}.\n` +
+        `(Note the field is 'dimension', not 'dimensions'.)`
+      );
+    }
+
     this.config = config;
     this.cache = new Map();
     // 'local' asks for the stub outright; the others only reach it by failing.

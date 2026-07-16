@@ -63,7 +63,10 @@ describe('Persistence and Data Migration', () => {
     // Initialize embedder
     embedder = new EmbeddingService({
       model: 'mock-model',
-      dimensions: 384,
+      // 'dimension', not 'dimensions' — the plural was silently ignored, so
+      // every embedding here was a zero-length vector and every vector insert
+      // failed on a dimension mismatch.
+      dimension: 384,
       provider: 'local',
     });
     await embedder.initialize();

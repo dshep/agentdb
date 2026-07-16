@@ -224,11 +224,13 @@ export class NightlyLearner {
       ? this.db.prepare(`
           SELECT id, task, output, reward FROM episodes
           WHERE session_id = ?
-          ORDER BY ts ASC
+          -- Trajectory order: ts is whole seconds, so tie-break on id or a
+          -- session's episodes come back shuffled within each second.
+          ORDER BY ts ASC, id ASC
         `).all(sessionId) as any[]
       : this.db.prepare(`
           SELECT id, task, output, reward FROM episodes
-          ORDER BY ts ASC
+          ORDER BY ts ASC, id ASC
           LIMIT 1000
         `).all() as any[];
 

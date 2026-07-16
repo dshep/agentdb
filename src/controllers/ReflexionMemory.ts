@@ -844,7 +844,12 @@ export class ReflexionMemory {
     const stmt = this.db.prepare<DatabaseRows.Episode>(`
       SELECT * FROM episodes
       WHERE session_id = ?
-      ORDER BY ts DESC
+      -- ts is strftime('%s') — whole seconds — so episodes written in the
+      -- same second tie, and ORDER BY ts alone leaves their order to SQLite.
+      -- An agent storing a few episodes in quick succession is the normal
+      -- case, not an edge case, and it got its trajectory back scrambled.
+      -- id is monotonic, so it breaks the tie in true insertion order.
+      ORDER BY ts DESC, id DESC
       LIMIT ?
     `);
 

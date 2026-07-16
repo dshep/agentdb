@@ -50,7 +50,7 @@ describe('API Backward Compatibility', () => {
     // Initialize embedder
     embedder = new EmbeddingService({
       model: 'mock-model',
-      dimensions: 384,
+      dimension: 384,
       provider: 'local',
     });
     await embedder.initialize();

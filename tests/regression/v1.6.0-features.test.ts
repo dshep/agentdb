@@ -121,7 +121,7 @@ describe('v1.6.0 New Features Regression Tests', () => {
       db = await createDatabase(testDbPath);
       embedder = new EmbeddingService({
         model: 'Xenova/all-MiniLM-L6-v2',
-        dimensions: 384,
+        dimension: 384,
         provider: 'transformers'
       });
       await embedder.initialize();
@@ -218,7 +218,7 @@ describe('v1.6.0 New Features Regression Tests', () => {
       db = await createDatabase(testDbPath);
       embedder = new EmbeddingService({
         model: 'Xenova/all-MiniLM-L6-v2',
-        dimensions: 384,
+        dimension: 384,
         provider: 'transformers'
       });
       await embedder.initialize();
@@ -306,7 +306,7 @@ describe('v1.6.0 New Features Regression Tests', () => {
       db = await createDatabase(testDbPath);
       embedder = new EmbeddingService({
         model: 'Xenova/all-MiniLM-L6-v2',
-        dimensions: 384,
+        dimension: 384,
         provider: 'transformers'
       });
       await embedder.initialize();
