@@ -20,6 +20,20 @@ export interface VectorConfig {
   /** Distance metric: 'cosine', 'l2' (Euclidean), 'ip' (inner product) */
   metric: 'cosine' | 'l2' | 'ip';
 
+  /**
+   * Where a persistent backend keeps its index.
+   *
+   * Should be derived from the owning database's path so each database gets
+   * its own index. Backends that persist (RuVector) otherwise fall back to a
+   * single engine-default file in the process CWD, which every database in
+   * every process then shares — one database's vectors surface in another's
+   * search results.
+   *
+   * Omit for an ephemeral index; persistent backends will isolate themselves
+   * per-instance rather than share a default.
+   */
+  storagePath?: string;
+
   /** Maximum number of elements (default: 100000) */
   maxElements?: number;
 

@@ -17,6 +17,10 @@
  * - Statistics tracking for performance monitoring
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
 import type { VectorBackend, VectorBackendAsync, VectorConfig, SearchResult, SearchOptions, VectorStats } from '../VectorBackend.js';
 
 // ============================================================================
@@ -237,6 +241,9 @@ export class RuVectorBackend implements VectorBackendAsync {
    */
   private pendingWrites: Array<Promise<unknown>> = [];
 
+  /** Set when we minted a private scratch index; removed on close(). */
+  private ephemeralStoragePath: string | null = null;
+
   // Concurrency control
   private semaphore: Semaphore;
   private bufferPool: BufferPool;
@@ -346,10 +353,17 @@ export class RuVectorBackend implements VectorBackendAsync {
       const efConstruction = this.config.efConstruction ?? adaptiveParams?.efConstruction ?? 200;
       const efSearch = this.config.efSearch ?? adaptiveParams?.efSearch ?? 100;
 
+      // Never let the engine pick its own storagePath. Its default is a single
+      // file in the process CWD ('./ruvector.db'), which every VectorDB in
+      // every process then shares — one database's vectors show up in another
+      // database's search results, across runs. Give each instance its own.
+      const storagePath = this.resolveStoragePath();
+
       // RuVector VectorDB constructor signature
       this.db = new VectorDB({
         dimensions: dimensions,  // Note: config object, not positional arg
         metric: this.config.metric,
+        storagePath,
         maxElements: maxElements,
         efConstruction: efConstruction,
         m: m  // Note: lowercase 'm'
@@ -729,6 +743,30 @@ export class RuVectorBackend implements VectorBackendAsync {
   // VectorDB is async-native. These methods are the honest interface to it;
   // the sync ones above exist only for VectorBackend compatibility.
 
+  /**
+   * Decide where this index lives.
+   *
+   * A caller-supplied storagePath (derived from the owning database's path)
+   * wins. Otherwise mint a unique ephemeral file under the temp dir: the
+   * engine's own default would silently co-mingle unrelated databases, and
+   * an isolated scratch index is the safer failure mode. Ephemeral indices
+   * are removed by close().
+   */
+  private resolveStoragePath(): string {
+    const configured = this.config.storagePath;
+    if (configured && configured !== ':memory:') {
+      return configured;
+    }
+
+    // ':memory:' is not a path RuVector accepts, and no path at all means the
+    // shared default — so both cases get a private scratch file instead.
+    this.ephemeralStoragePath = path.join(
+      os.tmpdir(),
+      `agentdb-ruvector-${process.pid}-${randomUUID()}.db`
+    );
+    return this.ephemeralStoragePath;
+  }
+
   /** Retain an in-flight write so flush() can settle it. */
   private trackWrite(p: unknown, op: string): void {
     if (!(p instanceof Promise)) return;
@@ -1021,6 +1059,19 @@ export class RuVectorBackend implements VectorBackendAsync {
     // Clean up mmap buffer
     if (this.mmapBuffer) {
       this.mmapBuffer = null;
+    }
+
+    // Remove the private scratch index, if we minted one. A caller-supplied
+    // storagePath is their data — never delete that.
+    if (this.ephemeralStoragePath) {
+      try {
+        fs.rmSync(this.ephemeralStoragePath, { force: true });
+      } catch (err) {
+        console.warn(
+          `[RuVectorBackend] Could not remove temporary index ${this.ephemeralStoragePath}: ${(err as Error).message}`
+        );
+      }
+      this.ephemeralStoragePath = null;
     }
 
     // Reset stats

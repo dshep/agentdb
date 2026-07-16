@@ -67,10 +67,16 @@ export class AgentDB {
     });
     await this.embedder.initialize();
 
-    // Initialize vector backend (RuVector preferred, HNSWLib fallback)
+    // Initialize vector backend (RuVector preferred, HNSWLib fallback).
+    // Give the index a path derived from this database's own path. Without
+    // one, a persistent backend falls back to a single engine-default file in
+    // the CWD that every database shares — so another database's vectors come
+    // back in this one's search results. An in-memory database has nowhere to
+    // anchor an index, so it gets an isolated ephemeral one.
     this.vectorBackend = await createBackend(this.config.vectorBackend || 'auto', {
       dimensions: vectorDimension,
-      metric: 'cosine'
+      metric: 'cosine',
+      storagePath: dbPath === ':memory:' ? undefined : `${dbPath}.vectors`
     });
 
     // Initialize controllers WITH vector backend for optimized search

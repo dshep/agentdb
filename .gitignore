@@ -41,3 +41,7 @@ bench-data/*
 !bench-data/.gitkeep
 data/*
 !data/.gitkeep
+
+# RuVector index sidecars — one per database, created next to the .db file
+*.vectors
+ruvector.db

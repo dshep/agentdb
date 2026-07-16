@@ -117,18 +117,62 @@ export async function detectBackend(): Promise<DetectionResult> {
 }
 
 /**
+ * Pull a version string off a RuVector module, whichever shape it uses.
+ *
+ * `ruvector` exposes getVersion() returning { version, implementation };
+ * other builds expose a `version` field or function.
+ */
+function readRuVectorVersion(mod: any): string | null {
+  if (!mod) return null;
+  try {
+    if (typeof mod.getVersion === 'function') {
+      const v = mod.getVersion();
+      const raw = typeof v === 'string' ? v : v?.version;
+      if (raw) return String(raw);
+    }
+    if (typeof mod.version === 'function') {
+      const v = mod.version();
+      if (v) return String(typeof v === 'string' ? v : v?.version ?? v);
+    }
+    if (typeof mod.version === 'string') return mod.version;
+  } catch {
+    // A probe throwing is not a detection failure — just an unknown version.
+  }
+  return null;
+}
+
+/**
  * Check RuVector availability and features
  */
 async function checkRuVector(): Promise<RuVectorAvailability> {
   try {
-    // Try to import @ruvector/core
-    const core = await import('@ruvector/core');
+    // Resolve the same way RuVectorBackend does: the `ruvector` package first,
+    // falling back to @ruvector/core. Probing only @ruvector/core reported
+    // native=false and version='unknown' unconditionally — it exposes neither
+    // isNative() nor version, while `ruvector` (the package actually loaded)
+    // exposes both. The engine was native all along; the check was misdirected.
+    let mod: any;
+    try {
+      mod = await import('ruvector');
+    } catch {
+      mod = await import('@ruvector/core');
+    }
+    const core: any = mod?.default ?? mod;
 
-    // Check if native bindings are available
-    const native = core.isNative?.() ?? false;
+    // Check if native bindings are available. Probe the imported namespace
+    // first — `ruvector` exposes isNative()/getVersion() at the top level,
+    // while its `default` is the inner @ruvector/core module, which reports
+    // the engine's own version rather than the package's.
+    const native: boolean =
+      typeof mod.isNative === 'function'
+        ? mod.isNative() === true
+        : typeof core.isNative === 'function'
+          ? core.isNative() === true
+          : false;
 
-    // Get version (if available)
-    const version = (core as any).version ?? 'unknown';
+    // Get version. `ruvector` exposes getVersion(); older builds used a
+    // `version` field or function.
+    const version = readRuVectorVersion(mod) ?? readRuVectorVersion(core) ?? 'unknown';
 
     // Check for GNN support
     let gnn = false;
