@@ -10,6 +10,8 @@
  */
 
 import { createDatabase } from '../db-fallback.js';
+import { createBackend, type BackendType } from '../backends/factory.js';
+import type { VectorBackend } from '../backends/VectorBackend.js';
 import { parseJsonStrict } from '../security/input-validation.js';
 import { CausalMemoryGraph } from '../controllers/CausalMemoryGraph.js';
 import { CausalRecall } from '../controllers/CausalRecall.js';
@@ -128,6 +130,9 @@ class ProgressBar {
   }
 }
 
+/** Backend types createBackend() actually recognises; anything else it silently treats as 'auto'. */
+const VALID_BACKENDS: readonly BackendType[] = ['auto', 'ruvector', 'rvf', 'hnswlib'];
+
 class AgentDBCLI {
   public db?: any; // Database instance from createDatabase (public for init command)
   private causalGraph?: CausalMemoryGraph;
@@ -137,49 +142,12 @@ class AgentDBCLI {
   private reflexion?: ReflexionMemory;
   private skills?: SkillLibrary;
   private embedder?: EmbeddingService;
+  private vectorBackend?: VectorBackend;
 
   // QUIC sync controllers
   private quicServer?: QUICServer;
   private quicClient?: QUICClient;
   private syncCoordinator?: SyncCoordinator;
-
-  /**
-   * Read the embedding settings `agentdb init` stored.
-   *
-   * The table is created by the init command, not the inlined schema, so a
-   * database made any other way legitimately lacks it — that means "no stored
-   * settings", not an error.
-   */
-  private readStoredEmbeddingConfig(): {
-    model?: string;
-    dimension?: number;
-    provider?: 'transformers' | 'openai' | 'local';
-  } {
-    try {
-      const rows = this.db
-        .prepare('SELECT key, value FROM agentdb_config')
-        .all() as Array<{ key: string; value: string }>;
-      const cfg = new Map(rows.map((r) => [r.key, r.value]));
-      const rawDim = cfg.get('dimension');
-      const dimension = rawDim ? parseInt(rawDim, 10) : undefined;
-      const rawProvider = cfg.get('embedding_provider');
-      const provider =
-        rawProvider === 'openai' || rawProvider === 'local' || rawProvider === 'transformers'
-          ? rawProvider
-          : undefined;
-      return {
-        model: cfg.get('embedding_model') || undefined,
-        dimension: Number.isFinite(dimension) ? dimension : undefined,
-        provider
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/no such table/i.test(msg)) {
-        log.warning(`Could not read agentdb_config: ${msg}`);
-      }
-      return {};
-    }
-  }
 
   /**
    * Flush the database to disk when the backend requires it.
@@ -193,6 +161,52 @@ class AgentDBCLI {
   private persist(): void {
     if (this.db && typeof this.db.save === 'function') {
       this.db.save();
+    }
+  }
+
+  /**
+   * Read the settings `agentdb init` wrote into `agentdb_config`.
+   *
+   * The table is created by the init command, not by the inlined schema, so
+   * a database created any other way legitimately won't have it — treat that
+   * as "no stored settings" rather than an error.
+   */
+  private readStoredConfig(): {
+    backend?: BackendType;
+    dimension?: number;
+    embeddingModel?: string;
+    provider?: 'transformers' | 'openai' | 'local';
+  } {
+    try {
+      const rows = this.db
+        .prepare('SELECT key, value FROM agentdb_config')
+        .all() as Array<{ key: string; value: string }>;
+      const cfg = new Map(rows.map((r) => [r.key, r.value]));
+
+      const backend = cfg.get('backend');
+      const dimension = cfg.get('dimension') ? parseInt(cfg.get('dimension')!, 10) : undefined;
+
+      // Only accept a provider we recognise; anything else means "unset" and
+      // falls back to the local default rather than reaching EmbeddingService
+      // as garbage.
+      const rawProvider = cfg.get('embedding_provider');
+      const provider =
+        rawProvider === 'openai' || rawProvider === 'local' || rawProvider === 'transformers'
+          ? rawProvider
+          : undefined;
+
+      return {
+        backend: backend as BackendType | undefined,
+        dimension: Number.isFinite(dimension) ? dimension : undefined,
+        embeddingModel: cfg.get('embedding_model') || undefined,
+        provider,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/no such table/i.test(msg)) {
+        log.warning(`Could not read agentdb_config: ${msg}`);
+      }
+      return {};
     }
   }
 
@@ -212,14 +226,17 @@ class AgentDBCLI {
     if (SCHEMA_SQL) this.db.exec(SCHEMA_SQL);
     if (FRONTIER_SCHEMA_SQL) this.db.exec(FRONTIER_SCHEMA_SQL);
 
-    // Honour what `agentdb init` recorded. These keys have been written since
-    // v2 but nothing ever read them back, so `init --dimension 1536 --model X`
-    // silently kept using MiniLM/384.
-    const stored = this.readStoredEmbeddingConfig();
+    // Honour what `agentdb init` recorded. Every one of these keys has been
+    // written since v2 and read back by nothing, so `init --backend ruvector
+    // --dimension 1536 --model X` picked a backend, a size and a model that
+    // were all silently ignored: every command ran SQL brute-force with no
+    // vector index, on MiniLM/384.
+    const stored = this.readStoredConfig();
+    const dimension = stored.dimension ?? 384;
 
     this.embedder = new EmbeddingService({
-      model: stored.model ?? 'Xenova/all-MiniLM-L6-v2',
-      dimension: stored.dimension ?? 384,
+      model: stored.embeddingModel ?? 'Xenova/all-MiniLM-L6-v2',
+      dimension,
       // Honour the recorded provider. Hardcoding 'transformers' here meant a
       // database initialised with an OpenAI model tried to fetch it from
       // HuggingFace and failed.
@@ -231,6 +248,10 @@ class AgentDBCLI {
     if (this.embedder.isUsingMockEmbeddings()) {
       log.warning('Embeddings are MOCK hash stubs — search results will be meaningless.');
     }
+
+    // Initialize the vector backend (RuVector/RVF/HNSWLib) so retrieval uses
+    // a real index instead of scanning every row. Mirrors AgentDB.initialize().
+    this.vectorBackend = await this.createVectorBackend(stored.backend, dimension);
 
     // Initialize controllers
     this.causalGraph = new CausalMemoryGraph(this.db);
@@ -248,11 +269,75 @@ class AgentDBCLI {
     this.reflexion = new ReflexionMemory(
       this.db,
       this.embedder,
-      undefined,  // vectorBackend - would be created with detectBackends()
+      this.vectorBackend,
       undefined,  // learningBackend - requires @ruvector/gnn
       undefined   // graphBackend - requires @ruvector/graph-node
     );
+
+    // The vector index is in-memory and per-process, but the CLI is one-shot:
+    // whatever `reflexion store` indexed is gone by the next command. Since
+    // retrieveRelevant() prefers the vector backend and never falls back to
+    // SQL once one is present, an unhydrated index means "no episodes found"
+    // for data that is sitting right there in SQLite. Rehydrate from the
+    // durable tables first (issue #129).
+    if (this.vectorBackend) {
+      const n = await this.reflexion.rebuildIndex();
+      if (n > 0) log.info(`Rebuilt vector index from ${n} stored episode(s)`);
+    }
+
+    // NOTE: SkillLibrary is deliberately left on the SQL path. Unlike
+    // ReflexionMemory — which always mirrors embeddings into
+    // episode_embeddings — SkillLibrary writes the embedding to the vector
+    // index *instead of* SQL (storeSkillEmbeddingLegacy is its else branch).
+    // Handing it a per-process in-memory index would drop every skill
+    // embedding at exit with no `skill_embeddings` row to rebuild from.
     this.skills = new SkillLibrary(this.db, this.embedder);
+  }
+
+  /**
+   * Build the configured vector backend.
+   *
+   * An explicitly configured backend that can't be created is a hard error —
+   * silently degrading to a brute-force scan is how `--backend ruvector`
+   * came to mean nothing in the first place. 'auto' (or no config at all) is
+   * a preference rather than a demand, so it may fall back to SQL scanning,
+   * but it says so out loud.
+   */
+  private async createVectorBackend(
+    configured: BackendType | undefined,
+    dimensions: number
+  ): Promise<VectorBackend | undefined> {
+    const requested = configured ?? 'auto';
+    const explicit = configured !== undefined && configured !== 'auto';
+
+    // createBackend() treats every unrecognised type as 'auto', so a typo or a
+    // corrupted config value would silently resolve to some other backend
+    // while the CLI reported success. Reject it here instead.
+    if (!VALID_BACKENDS.includes(requested)) {
+      throw new Error(
+        `Unknown vector backend '${requested}' in agentdb_config. ` +
+        `Expected one of: ${VALID_BACKENDS.join(', ')}.\n` +
+        `Re-run \`agentdb init --backend auto\` to reset it.`
+      );
+    }
+
+    try {
+      const backend = await createBackend(requested, { dimensions, metric: 'cosine' });
+      log.info(`Vector backend: ${backend.name}`);
+      return backend;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (explicit) {
+        throw new Error(
+          `Configured vector backend '${requested}' is unavailable: ${msg}\n` +
+          `Re-run \`agentdb init --backend auto\` to select whatever this machine supports.`
+        );
+      }
+      log.warning(
+        `No vector backend available (${msg}) — falling back to SQL brute-force search.`
+      );
+      return undefined;
+    }
   }
 
   // ============================================================================
