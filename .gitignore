@@ -46,3 +46,4 @@ data/*
 *.vectors
 ruvector.db
 :memory:
+gh_tokens
