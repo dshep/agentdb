@@ -1836,29 +1836,7 @@ async function main() {
 
   // Handle version flag
   if (args[0] === '--version' || args[0] === '-v' || args[0] === 'version') {
-    // Try multiple paths to find package.json (handles different execution contexts)
-    const possiblePaths = [
-      path.join(__dirname, '../../package.json'),  // dist/src/cli/../../package.json (local dev)
-      path.join(__dirname, '../../../package.json'), // dist/package.json (published package)
-      path.join(process.cwd(), 'package.json'),
-      path.join(process.cwd(), 'node_modules/agentdb/package.json')
-    ];
-
-    let version = '2.0.0-alpha.2.6'; // Fallback version
-    for (const pkgPath of possiblePaths) {
-      try {
-        if (fs.existsSync(pkgPath)) {
-          const packageJson = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-          if (packageJson.name === 'agentdb' && packageJson.version) {
-            version = packageJson.version;
-            break;
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-    console.log(`agentdb v${version}`);
+    console.log(`agentdb v${readOwnVersion()}`);
     process.exit(0);
   }
 
@@ -2141,6 +2119,35 @@ async function main() {
     log.error((error as Error).message);
     process.exit(1);
   }
+}
+
+/**
+ * Report this build's version, read from the package.json shipped beside it.
+ *
+ * This used to guess at a list of relative and cwd-based paths and accept one
+ * only if `name === 'agentdb'`, falling back to a hardcoded '2.0.0-alpha.2.6'.
+ * Scoping the package broke every candidate at once and the CLI silently
+ * reported that stale literal — and any consumer whose cwd held an unrelated
+ * package.json could have been misreported too. Walk up from this file
+ * instead: the nearest package.json above it is ours, whatever it is called.
+ */
+function readOwnVersion(): string {
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, 'package.json');
+    try {
+      if (fs.existsSync(candidate)) {
+        const pkg = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+        if (pkg.version) return pkg.version as string;
+      }
+    } catch {
+      // Unreadable or malformed — keep walking rather than guess.
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return 'unknown';
 }
 
 // Command handlers

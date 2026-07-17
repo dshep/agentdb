@@ -1,6 +1,6 @@
 {
-  "name": "agentdb",
-  "version": "3.0.0-alpha.17",
+  "name": "@optimy-ai/agentdb",
+  "version": "3.0.0-alpha.17-optimy.1",
   "description": "Self-learning vector memory for AI agents \u2014 single-file .rvf cognitive container with HNSW search, episodic Reflexion memory, causal graph + Cypher, 9 RL algorithms, Thompson Sampling bandit, 41 MCP tools, hybrid (BM25 + dense) retrieval, GNN attention. 150x faster than SQLite. Up to +36% search quality from feedback. Runs in Node, browsers (WASM), edge, offline. Backs the agentic-flow / ruflo / Claude Code memory layer.",
   "type": "module",
   "main": "dist/src/index.js",
@@ -53,7 +53,8 @@
   },
   "scripts": {
     "build": "npm run build:ts && npm run copy:schemas && npm run build:browser",
-    "build:ts": "tsc",
+    "prepack": "npm run build",
+    "build:ts": "tsc -p tsconfig.build.json",
     "copy:schemas": "mkdir -p dist/schemas && cp src/schemas/*.sql dist/schemas/",
     "build:browser": "node scripts/build-browser.js && node scripts/build-browser-v2.js",
     "build:edge": "node scripts/build-browser.config.js",
@@ -152,7 +153,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ruvnet/agentdb.git"
+    "url": "git+https://github.com/optimy-ai/agentdb.git"
   },
   "bugs": {
     "url": "https://github.com/ruvnet/agentdb/issues"
@@ -220,5 +221,8 @@
       "sharp": "^0.33.0"
     },
     "protobufjs": "^7.6.1"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   }
 }

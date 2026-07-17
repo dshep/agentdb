@@ -1,0 +1,28 @@
+{
+  // Build config for the published package.
+  //
+  // tsconfig.json compiles src, simulation, benchmarks, examples and tests —
+  // useful for editor/typecheck coverage, fatal for `npm pack`: tsc exits
+  // non-zero on type errors in examples/ and tests/ (114 of them, none in
+  // src/), so prepack aborted and produced an empty tarball. Those trees were
+  // also being emitted into dist/ and shipped to consumers.
+  //
+  // rootDir stays "." so output keeps the dist/src/... layout that
+  // package.json's main and bin already point at.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "."
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "src/middleware/**",
+    "src/db/migrations/**",
+    "src/utils/crypto.utils.ts",
+    "src/services/token.service.ts",
+    "src/services/auth.service.ts"
+  ]
+}

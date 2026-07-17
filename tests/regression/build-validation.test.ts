@@ -126,11 +126,15 @@ describe('Build Validation Tests', () => {
         fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8')
       );
 
-      expect(packageJson.name).toBe('agentdb');
+      // This fork publishes to the optimy-ai org's GitHub Packages registry,
+      // which requires the scope to match the org.
+      expect(packageJson.name).toBe('@optimy-ai/agentdb');
       // Assert the invariant, not a snapshot: pinning '1.6.1' here meant this
       // failed on every release, and the entry points moved to dist/src/ long
       // ago without anyone noticing this was still describing the old layout.
-      expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?$/);
+      // Prerelease identifiers may contain hyphens (3.0.0-alpha.17-optimy.1)
+      // and may be followed by build metadata.
+      expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/);
       expect(packageJson.type).toBe('module');
       expect(packageJson.main).toMatch(/^dist\/.*index\.js$/);
       expect(packageJson.types).toMatch(/^dist\/.*index\.d\.ts$/);
